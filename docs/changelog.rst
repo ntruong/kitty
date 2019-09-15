@@ -17,6 +17,14 @@ To update |kitty|, :doc:`follow the instructions <binary>`.
 - When resetting the terminal, also reset parser state, this allows easy
   recovery from incomplete escape codes (:iss:`1961`)
 
+- Allow mapping keys commonly found on European keyboards (:pull:`1928`)
+
+- Fix incorrect rendering of some symbols when followed by a space while using
+  the PowerLine font which does not have a space glyph (:iss:`1225`)
+
+- Linux: Allow using fonts with spacing=90 in addition to fonts with
+  spacing=100 (:iss:`1968`)
+
 
 0.14.4 [2019-08-31]
 ---------------------
