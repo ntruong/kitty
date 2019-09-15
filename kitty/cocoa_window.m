@@ -485,6 +485,14 @@ cocoa_hide_window_title(void *w)
     NSWindow *window = (NSWindow*)w;
     [window setTitleVisibility:NSWindowTitleHidden];
 
+    [window standardWindowButton: NSWindowCloseButton].hidden = true;
+    [window standardWindowButton: NSWindowMiniaturizeButton].hidden = true;
+    [window standardWindowButton: NSWindowZoomButton].hidden = true;
+
+    window.movableByWindowBackground = true;
+    // [window setStyleMask:
+    //      [window styleMask] | NSWindowStyleMaskFullSizeContentView];
+
     } // autoreleasepool
 }
 
