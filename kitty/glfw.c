@@ -7,6 +7,7 @@
 #include "state.h"
 #include "glfw_tests.h"
 #include "fonts.h"
+#include "monotonic.h"
 #include <structmember.h>
 #include "glfw-wrapper.h"
 extern bool cocoa_make_window_resizable(void *w, bool);
@@ -17,7 +18,7 @@ extern void cocoa_set_activation_policy(bool);
 extern void cocoa_set_titlebar_color(void *w, color_type color);
 extern bool cocoa_alt_option_key_pressed(unsigned long);
 extern size_t cocoa_get_workspace_ids(void *w, size_t *workspace_ids, size_t array_sz);
-extern double cocoa_cursor_blink_interval(void);
+extern monotonic_t cocoa_cursor_blink_interval(void);
 
 
 #if GLFW_KEY_LAST >= MAX_KEY_COUNT
@@ -41,7 +42,10 @@ update_os_window_viewport(OSWindow *window, bool notify_boss) {
     int w, h, fw, fh;
     glfwGetFramebufferSize(window->handle, &fw, &fh);
     glfwGetWindowSize(window->handle, &w, &h);
-    if (fw == window->viewport_width && fh == window->viewport_height && w == window->window_width && h == window->window_height) {
+    double xdpi = window->logical_dpi_x, ydpi = window->logical_dpi_y;
+    set_os_window_dpi(window);
+
+    if (fw == window->viewport_width && fh == window->viewport_height && w == window->window_width && h == window->window_height && xdpi == window->logical_dpi_x && ydpi == window->logical_dpi_y) {
         return; // no change, ignore
     }
     if (w <= 0 || h <= 0 || fw / w > 5 || fh / h > 5 || fw < min_width || fh < min_height || fw < w || fh < h) {
@@ -62,8 +66,6 @@ update_os_window_viewport(OSWindow *window, bool notify_boss) {
     double xr = window->viewport_x_ratio, yr = window->viewport_y_ratio;
     window->viewport_x_ratio = w > 0 ? (double)window->viewport_width / (double)w : xr;
     window->viewport_y_ratio = h > 0 ? (double)window->viewport_height / (double)h : yr;
-    double xdpi = window->logical_dpi_x, ydpi = window->logical_dpi_y;
-    set_os_window_dpi(window);
     bool dpi_changed = (xr != 0.0 && xr != window->viewport_x_ratio) || (yr != 0.0 && yr != window->viewport_y_ratio) || (xdpi != window->logical_dpi_x) || (ydpi != window->logical_dpi_y);
 
     window->viewport_size_dirty = true;
@@ -82,7 +84,7 @@ log_event(const char *format, ...) {
     {
         va_list vl;
 
-        fprintf(stderr, "[%.4f] ", glfwGetTime());
+        fprintf(stderr, "[%.4f] ", monotonic_t_to_s_double(glfwGetTime()));
         va_start(vl, format);
         vfprintf(stderr, format, vl);
         va_end(vl);
@@ -230,14 +232,14 @@ refresh_callback(GLFWwindow *w) {
 static int mods_at_last_key_or_button_event = 0;
 
 static void
-key_callback(GLFWwindow *w, int key, int scancode, int action, int mods, const char* text, int state) {
+key_callback(GLFWwindow *w, GLFWkeyevent *ev) {
     if (!set_callback_window(w)) return;
-    mods_at_last_key_or_button_event = mods;
+    mods_at_last_key_or_button_event = ev->mods;
     global_state.callback_os_window->cursor_blink_zero_time = monotonic();
-    if (key >= 0 && key <= GLFW_KEY_LAST) {
-        global_state.callback_os_window->is_key_pressed[key] = action == GLFW_RELEASE ? false : true;
+    if (ev->key >= 0 && ev->key <= GLFW_KEY_LAST) {
+        global_state.callback_os_window->is_key_pressed[ev->key] = ev->action == GLFW_RELEASE ? false : true;
     }
-    if (is_window_ready_for_callbacks()) on_key_input(key, scancode, action, mods, text, state);
+    if (is_window_ready_for_callbacks()) on_key_input(ev);
     global_state.callback_os_window = NULL;
     request_tick_callback();
 }
@@ -247,7 +249,7 @@ cursor_enter_callback(GLFWwindow *w, int entered) {
     if (!set_callback_window(w)) return;
     if (entered) {
         show_mouse_cursor(w);
-        double now = monotonic();
+        monotonic_t now = monotonic();
         global_state.callback_os_window->last_mouse_activity_at = now;
         if (is_window_ready_for_callbacks()) enter_event();
         request_tick_callback();
@@ -260,7 +262,7 @@ mouse_button_callback(GLFWwindow *w, int button, int action, int mods) {
     if (!set_callback_window(w)) return;
     show_mouse_cursor(w);
     mods_at_last_key_or_button_event = mods;
-    double now = monotonic();
+    monotonic_t now = monotonic();
     global_state.callback_os_window->last_mouse_activity_at = now;
     if (button >= 0 && (unsigned int)button < arraysz(global_state.callback_os_window->mouse_button_pressed)) {
         global_state.callback_os_window->mouse_button_pressed[button] = action == GLFW_PRESS ? true : false;
@@ -274,7 +276,7 @@ static void
 cursor_pos_callback(GLFWwindow *w, double x, double y) {
     if (!set_callback_window(w)) return;
     show_mouse_cursor(w);
-    double now = monotonic();
+    monotonic_t now = monotonic();
     global_state.callback_os_window->last_mouse_activity_at = now;
     global_state.callback_os_window->cursor_blink_zero_time = now;
     global_state.callback_os_window->mouse_x = x * global_state.callback_os_window->viewport_x_ratio;
@@ -288,7 +290,7 @@ static void
 scroll_callback(GLFWwindow *w, double xoffset, double yoffset, int flags) {
     if (!set_callback_window(w)) return;
     show_mouse_cursor(w);
-    double now = monotonic();
+    monotonic_t now = monotonic();
     global_state.callback_os_window->last_mouse_activity_at = now;
     if (is_window_ready_for_callbacks()) scroll_event(xoffset, yoffset, flags);
     request_tick_callback();
@@ -307,7 +309,7 @@ window_focus_callback(GLFWwindow *w, int focused) {
         focus_in_event();
         global_state.callback_os_window->last_focused_counter = ++focus_counter;
     }
-    double now = monotonic();
+    monotonic_t now = monotonic();
     global_state.callback_os_window->last_mouse_activity_at = now;
     global_state.callback_os_window->cursor_blink_zero_time = now;
     if (is_window_ready_for_callbacks()) {
@@ -601,10 +603,10 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
 #undef CC
         if (OPT(click_interval) < 0) OPT(click_interval) = glfwGetDoubleClickInterval(glfw_window);
         if (OPT(cursor_blink_interval) < 0) {
-            OPT(cursor_blink_interval) = 0.5;
+            OPT(cursor_blink_interval) = ms_to_monotonic_t(500ll);
 #ifdef __APPLE__
-            double cbi = cocoa_cursor_blink_interval();
-            if (cbi >= 0) OPT(cursor_blink_interval) = cbi / 2000.0;
+            monotonic_t cbi = cocoa_cursor_blink_interval();
+            if (cbi >= 0) OPT(cursor_blink_interval) = cbi / 2;
 #endif
         }
         is_first_window = false;
@@ -654,7 +656,7 @@ create_os_window(PyObject UNUSED *self, PyObject *args) {
         cocoa_make_window_resizable(glfwGetCocoaWindow(glfw_window), OPT(macos_window_resizable));
     } else log_error("Failed to load glfwGetCocoaWindow");
 #endif
-    double now = monotonic();
+    monotonic_t now = monotonic();
     w->is_focused = true;
     w->cursor_blink_zero_time = now;
     w->last_mouse_activity_at = now;
@@ -814,8 +816,8 @@ get_physical_dpi(GLFWmonitor *m) {
     if (width == 0 || height == 0) { PyErr_SetString(PyExc_ValueError, "Failed to get primary monitor size"); return NULL; }
     const GLFWvidmode *vm = glfwGetVideoMode(m);
     if (vm == NULL) { PyErr_SetString(PyExc_ValueError, "Failed to get video mode for monitor"); return NULL; }
-    float dpix = vm->width / (width / 25.4);
-    float dpiy = vm->height / (height / 25.4);
+    float dpix = (float)(vm->width / (width / 25.4));
+    float dpiy = (float)(vm->height / (height / 25.4));
     return Py_BuildValue("ff", dpix, dpiy);
 }
 
@@ -853,9 +855,9 @@ get_clipboard_string(PYNOARG) {
 
 void
 ring_audio_bell(OSWindow *w UNUSED) {
-    static double last_bell_at = -1;
-    double now = monotonic();
-    if (now - last_bell_at <= 0.1) return;
+    static monotonic_t last_bell_at = -1;
+    monotonic_t now = monotonic();
+    if (now - last_bell_at <= ms_to_monotonic_t(100ll)) return;
     last_bell_at = now;
 #ifdef __APPLE__
     if (w->handle) {
@@ -1138,12 +1140,12 @@ dbus_send_notification(PyObject *self UNUSED, PyObject *args) {
 #endif
 
 id_type
-add_main_loop_timer(double interval, bool repeats, timer_callback_fun callback, void *callback_data, timer_callback_fun free_callback) {
+add_main_loop_timer(monotonic_t interval, bool repeats, timer_callback_fun callback, void *callback_data, timer_callback_fun free_callback) {
     return glfwAddTimer(interval, repeats, callback, callback_data, free_callback);
 }
 
 void
-update_main_loop_timer(id_type timer_id, double interval, bool enabled) {
+update_main_loop_timer(id_type timer_id, monotonic_t interval, bool enabled) {
     glfwUpdateTimer(timer_id, interval, enabled);
 }
 

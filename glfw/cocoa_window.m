@@ -27,6 +27,7 @@
 //========================================================================
 
 #include "internal.h"
+#include "../kitty/monotonic.h"
 
 #include <float.h>
 #include <string.h>
@@ -120,7 +121,7 @@ CGDirectDisplayID displayIDForWindow(_GLFWwindow *w) {
 }
 
 static unsigned long long display_link_shutdown_timer = 0;
-#define DISPLAY_LINK_SHUTDOWN_CHECK_INTERVAL 30
+#define DISPLAY_LINK_SHUTDOWN_CHECK_INTERVAL s_to_monotonic_t(30ll)
 
 void
 _glfwShutdownCVDisplayLink(unsigned long long timer_id UNUSED, void *user_data UNUSED) {
@@ -147,7 +148,7 @@ requestRenderFrame(_GLFWwindow *w, GLFWcocoarenderframefun callback) {
     } else {
         display_link_shutdown_timer = _glfwPlatformAddTimer(DISPLAY_LINK_SHUTDOWN_CHECK_INTERVAL, false, _glfwShutdownCVDisplayLink, NULL, NULL);
     }
-    double now = glfwGetTime();
+    monotonic_t now = glfwGetTime();
     for (size_t i = 0; i < _glfw.ns.displayLinks.count; i++) {
         _GLFWDisplayLinkNS *dl = &_glfw.ns.displayLinks.entries[i];
         if (dl->displayID == displayID) {
@@ -572,17 +573,17 @@ static const NSRange kEmptyRange = { NSNotFound, 0 };
     if (fbRect.size.width != window->ns.fbWidth ||
         fbRect.size.height != window->ns.fbHeight)
     {
-        window->ns.fbWidth  = fbRect.size.width;
-        window->ns.fbHeight = fbRect.size.height;
-        _glfwInputFramebufferSize(window, fbRect.size.width, fbRect.size.height);
+        window->ns.fbWidth  = (int)fbRect.size.width;
+        window->ns.fbHeight = (int)fbRect.size.height;
+        _glfwInputFramebufferSize(window, (int)fbRect.size.width, (int)fbRect.size.height);
     }
 
     if (contentRect.size.width != window->ns.width ||
         contentRect.size.height != window->ns.height)
     {
-        window->ns.width  = contentRect.size.width;
-        window->ns.height = contentRect.size.height;
-        _glfwInputWindowSize(window, contentRect.size.width, contentRect.size.height);
+        window->ns.width  = (int)contentRect.size.width;
+        window->ns.height = (int)contentRect.size.height;
+        _glfwInputWindowSize(window, (int)contentRect.size.width, (int)contentRect.size.height);
     }
 }
 
@@ -960,9 +961,9 @@ static GLFWapplicationshouldhandlereopenfun handle_reopen_callback = NULL;
     if (fbRect.size.width != window->ns.fbWidth ||
         fbRect.size.height != window->ns.fbHeight)
     {
-        window->ns.fbWidth  = fbRect.size.width;
-        window->ns.fbHeight = fbRect.size.height;
-        _glfwInputFramebufferSize(window, fbRect.size.width, fbRect.size.height);
+        window->ns.fbWidth  = (int)fbRect.size.width;
+        window->ns.fbHeight = (int)fbRect.size.height;
+        _glfwInputFramebufferSize(window, (int)fbRect.size.width, (int)fbRect.size.height);
     }
 
     const float xscale = fbRect.size.width / contentRect.size.width;
@@ -1055,6 +1056,8 @@ is_ascii_control_char(char x) {
     const bool previous_has_marked_text = [self hasMarkedText];
     [self unmarkText];
     _glfw.ns.text[0] = 0;
+    GLFWkeyevent glfw_keyevent;
+    _glfwInitializeKeyEvent(&glfw_keyevent, key, scancode, GLFW_PRESS, mods);
     if (!_glfw.ns.unicodeData) {
         // Using the cocoa API for key handling is disabled, as there is no
         // reliable way to handle dead keys using it. Only use it if the
@@ -1095,14 +1098,16 @@ is_ascii_control_char(char x) {
         if (window->ns.deadKeyState && (char_count == 0 || scancode == 0x75)) {
             // 0x75 is the delete key which needs to be ignored during a compose sequence
             debug_key(@"Sending pre-edit text for dead key (text: %@ markedText: %@).\n", @(format_text(_glfw.ns.text)), markedText);
-            _glfwInputKeyboard(window, key, scancode, GLFW_PRESS, mods,
-                               [[markedText string] UTF8String], 1); // update pre-edit text
+            glfw_keyevent.text = [[markedText string] UTF8String];
+            glfw_keyevent.ime_state = 1;
+            _glfwInputKeyboard(window, &glfw_keyevent); // update pre-edit text
             return;
         }
         if (in_compose_sequence) {
             debug_key(@"Clearing pre-edit text at end of compose sequence\n");
-            _glfwInputKeyboard(window, key, scancode, GLFW_PRESS, mods,
-                               NULL, 1); // clear pre-edit text
+            glfw_keyevent.text = NULL;
+            glfw_keyevent.ime_state = 1;
+            _glfwInputKeyboard(window, &glfw_keyevent); // clear pre-edit text
         }
     }
     if (is_ascii_control_char(_glfw.ns.text[0])) _glfw.ns.text[0] = 0;  // don't send text for ascii control codes
@@ -1110,18 +1115,22 @@ is_ascii_control_char(char x) {
             @(format_text(_glfw.ns.text)), @(_glfwGetKeyName(key)), markedText);
     if (!window->ns.deadKeyState) {
         if ([self hasMarkedText]) {
-            _glfwInputKeyboard(window, key, scancode, GLFW_PRESS, mods,
-                               [[markedText string] UTF8String], 1); // update pre-edit text
+            glfw_keyevent.text = [[markedText string] UTF8String];
+            glfw_keyevent.ime_state = 1;
+            _glfwInputKeyboard(window, &glfw_keyevent); // update pre-edit text
         } else if (previous_has_marked_text) {
-            _glfwInputKeyboard(window, key, scancode, GLFW_PRESS, mods,
-                               NULL, 1); // clear pre-edit text
+            glfw_keyevent.text = NULL;
+            glfw_keyevent.ime_state = 1;
+            _glfwInputKeyboard(window, &glfw_keyevent); // clear pre-edit text
         }
         if (([self hasMarkedText] || previous_has_marked_text) && !_glfw.ns.text[0]) {
             // do not pass keys like BACKSPACE while there's pre-edit text, let IME handle it
             return;
         }
     }
-    _glfwInputKeyboard(window, key, scancode, GLFW_PRESS, mods, _glfw.ns.text, 0);
+    glfw_keyevent.text = _glfw.ns.text;
+    glfw_keyevent.ime_state = 0;
+    _glfwInputKeyboard(window, &glfw_keyevent);
 }
 
 - (void)flagsChanged:(NSEvent *)event
@@ -1143,14 +1152,19 @@ is_ascii_control_char(char x) {
     else
         action = GLFW_RELEASE;
 
-    _glfwInputKeyboard(window, key, [event keyCode], action, mods, "", 0);
+    GLFWkeyevent glfw_keyevent;
+    _glfwInitializeKeyEvent(&glfw_keyevent, key, [event keyCode], action, mods);
+    _glfwInputKeyboard(window, &glfw_keyevent);
 }
 
 - (void)keyUp:(NSEvent *)event
 {
     const int key = translateKey([event keyCode], true);
     const int mods = translateFlags([event modifierFlags]);
-    _glfwInputKeyboard(window, key, [event keyCode], GLFW_RELEASE, mods, "", 0);
+
+    GLFWkeyevent glfw_keyevent;
+    _glfwInitializeKeyEvent(&glfw_keyevent, key, [event keyCode], GLFW_RELEASE, mods);
+    _glfwInputKeyboard(window, &glfw_keyevent);
 }
 
 - (void)scrollWheel:(NSEvent *)event
@@ -1734,9 +1748,9 @@ void _glfwPlatformGetWindowPos(_GLFWwindow* window, int* xpos, int* ypos)
         [window->ns.object contentRectForFrameRect:[window->ns.object frame]];
 
     if (xpos)
-        *xpos = contentRect.origin.x;
+        *xpos = (int)contentRect.origin.x;
     if (ypos)
-        *ypos = _glfwTransformYNS(contentRect.origin.y + contentRect.size.height - 1);
+        *ypos = (int)_glfwTransformYNS(contentRect.origin.y + contentRect.size.height - 1);
 }
 
 void _glfwPlatformSetWindowPos(_GLFWwindow* window, int x, int y)
@@ -1752,9 +1766,9 @@ void _glfwPlatformGetWindowSize(_GLFWwindow* window, int* width, int* height)
     const NSRect contentRect = [window->ns.view frame];
 
     if (width)
-        *width = contentRect.size.width;
+        *width = (int)contentRect.size.width;
     if (height)
-        *height = contentRect.size.height;
+        *height = (int)contentRect.size.height;
 }
 
 void _glfwPlatformSetWindowSize(_GLFWwindow* window, int width, int height)
@@ -1817,15 +1831,15 @@ void _glfwPlatformGetWindowFrameSize(_GLFWwindow* window,
     const NSRect frameRect = [window->ns.object frameRectForContentRect:contentRect];
 
     if (left)
-        *left = contentRect.origin.x - frameRect.origin.x;
+        *left = (int)(contentRect.origin.x - frameRect.origin.x);
     if (top)
-        *top = frameRect.origin.y + frameRect.size.height -
-               contentRect.origin.y - contentRect.size.height;
+        *top = (int)(frameRect.origin.y + frameRect.size.height -
+               contentRect.origin.y - contentRect.size.height);
     if (right)
-        *right = frameRect.origin.x + frameRect.size.width -
-                 contentRect.origin.x - contentRect.size.width;
+        *right = (int)(frameRect.origin.x + frameRect.size.width -
+                 contentRect.origin.x - contentRect.size.width);
     if (bottom)
-        *bottom = contentRect.origin.y - frameRect.origin.y;
+        *bottom = (int)(contentRect.origin.y - frameRect.origin.y);
 }
 
 void _glfwPlatformGetWindowContentScale(_GLFWwindow* window,
@@ -1840,9 +1854,9 @@ void _glfwPlatformGetWindowContentScale(_GLFWwindow* window,
         *yscale = (float) (pixels.size.height / points.size.height);
 }
 
-double _glfwPlatformGetDoubleClickInterval(_GLFWwindow* window UNUSED)
+monotonic_t _glfwPlatformGetDoubleClickInterval(_GLFWwindow* window UNUSED)
 {
-    return [NSEvent doubleClickInterval];
+    return s_double_to_monotonic_t([NSEvent doubleClickInterval]);
 }
 
 void _glfwPlatformIconifyWindow(_GLFWwindow* window)
