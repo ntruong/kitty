@@ -489,9 +489,10 @@ cocoa_hide_window_title(void *w)
     [window standardWindowButton: NSWindowMiniaturizeButton].hidden = true;
     [window standardWindowButton: NSWindowZoomButton].hidden = true;
 
-    window.movableByWindowBackground = true;
-    // [window setStyleMask:
-    //      [window styleMask] | NSWindowStyleMaskFullSizeContentView];
+    // window.movableByWindowBackground = true;
+    window.titlebarAppearsTransparent = true;
+    [window setStyleMask:
+         [window styleMask] | NSWindowStyleMaskFullSizeContentView];
 
     } // autoreleasepool
 }
