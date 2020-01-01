@@ -67,6 +67,7 @@ typedef struct {
 
     unsigned int columns, lines, margin_top, margin_bottom, charset, scrolled_by, last_selection_scrolled_by;
     unsigned int last_rendered_cursor_x, last_rendered_cursor_y;
+    double pending_scroll_pixels;
     CellPixelSize cell_size;
     OverlayLine overlay_line;
     id_type window_id;
@@ -75,7 +76,7 @@ typedef struct {
     Selection selection;
     SelectionBoundary last_rendered_selection_start, last_rendered_selection_end, last_rendered_url_start, last_rendered_url_end;
     Selection url_range;
-    bool use_latin1, selection_updated_once, is_dirty, scroll_changed;
+    bool use_latin1, selection_updated_once, is_dirty, scroll_changed, reload_all_gpu_data;
     Cursor *cursor;
     SavepointBuffer main_savepoints, alt_savepoints;
     SavemodesBuffer modes_savepoints;

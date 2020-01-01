@@ -245,8 +245,8 @@ load_glfw(const char* path) {
     *(void **) (&glfwGetKeyName_impl) = dlsym(handle, "glfwGetKeyName");
     if (glfwGetKeyName_impl == NULL) fail("Failed to load glfw function glfwGetKeyName with error: %s", dlerror());
 
-    *(void **) (&glfwGetKeyScancode_impl) = dlsym(handle, "glfwGetKeyScancode");
-    if (glfwGetKeyScancode_impl == NULL) fail("Failed to load glfw function glfwGetKeyScancode with error: %s", dlerror());
+    *(void **) (&glfwGetNativeKeyForKey_impl) = dlsym(handle, "glfwGetNativeKeyForKey");
+    if (glfwGetNativeKeyForKey_impl == NULL) fail("Failed to load glfw function glfwGetNativeKeyForKey with error: %s", dlerror());
 
     *(void **) (&glfwGetKey_impl) = dlsym(handle, "glfwGetKey");
     if (glfwGetKey_impl == NULL) fail("Failed to load glfw function glfwGetKey with error: %s", dlerror());
@@ -344,15 +344,6 @@ load_glfw(const char* path) {
     *(void **) (&glfwGetTime_impl) = dlsym(handle, "glfwGetTime");
     if (glfwGetTime_impl == NULL) fail("Failed to load glfw function glfwGetTime with error: %s", dlerror());
 
-    *(void **) (&glfwSetTime_impl) = dlsym(handle, "glfwSetTime");
-    if (glfwSetTime_impl == NULL) fail("Failed to load glfw function glfwSetTime with error: %s", dlerror());
-
-    *(void **) (&glfwGetTimerValue_impl) = dlsym(handle, "glfwGetTimerValue");
-    if (glfwGetTimerValue_impl == NULL) fail("Failed to load glfw function glfwGetTimerValue with error: %s", dlerror());
-
-    *(void **) (&glfwGetTimerFrequency_impl) = dlsym(handle, "glfwGetTimerFrequency");
-    if (glfwGetTimerFrequency_impl == NULL) fail("Failed to load glfw function glfwGetTimerFrequency with error: %s", dlerror());
-
     *(void **) (&glfwMakeContextCurrent_impl) = dlsym(handle, "glfwMakeContextCurrent");
     if (glfwMakeContextCurrent_impl == NULL) fail("Failed to load glfw function glfwMakeContextCurrent with error: %s", dlerror());
 
@@ -389,6 +380,8 @@ load_glfw(const char* path) {
 
     *(void **) (&glfwSetApplicationShouldHandleReopen_impl) = dlsym(handle, "glfwSetApplicationShouldHandleReopen");
 
+    *(void **) (&glfwSetApplicationWillFinishLaunching_impl) = dlsym(handle, "glfwSetApplicationWillFinishLaunching");
+
     *(void **) (&glfwGetCocoaKeyEquivalent_impl) = dlsym(handle, "glfwGetCocoaKeyEquivalent");
 
     *(void **) (&glfwCocoaRequestRenderFrame_impl) = dlsym(handle, "glfwCocoaRequestRenderFrame");
@@ -401,7 +394,7 @@ load_glfw(const char* path) {
 
     *(void **) (&glfwGetPrimarySelectionString_impl) = dlsym(handle, "glfwGetPrimarySelectionString");
 
-    *(void **) (&glfwGetXKBScancode_impl) = dlsym(handle, "glfwGetXKBScancode");
+    *(void **) (&glfwGetNativeKeyForName_impl) = dlsym(handle, "glfwGetNativeKeyForName");
 
     *(void **) (&glfwRequestWaylandFrameEvent_impl) = dlsym(handle, "glfwRequestWaylandFrameEvent");
 

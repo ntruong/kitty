@@ -55,12 +55,17 @@ static bool checkScaleChange(_GLFWwindow* window)
     if (_glfw.wl.compositorVersion < 3)
         return false;
 
-    // Get the scale factor from the highest scale monitor.
+    // Get the scale factor from the highest scale monitor that this window is on
     for (i = 0; i < window->wl.monitorsCount; ++i)
     {
         monitorScale = window->wl.monitors[i]->wl.scale;
         if (scale < monitorScale)
             scale = monitorScale;
+    }
+    if (window->wl.monitorsCount < 1 && _glfw.monitorCount > 0) {
+        // The window has not yet been assigned to any monitors, use the primary monitor
+        _GLFWmonitor *m = _glfw.monitors[0];
+        if (m && m->wl.scale > scale) scale = m->wl.scale;
     }
 
     // Only change the framebuffer size if the scale changed.
@@ -68,6 +73,10 @@ static bool checkScaleChange(_GLFWwindow* window)
     {
         window->wl.scale = scale;
         wl_surface_set_buffer_scale(window->wl.surface, scale);
+        return true;
+    }
+    if (window->wl.monitorsCount > 0 && !window->wl.initial_scale_notified) {
+        window->wl.initial_scale_notified = true;
         return true;
     }
     return false;
@@ -242,8 +251,8 @@ static struct wl_buffer* createShmBuffer(const GLFWimage* image)
     if (fd < 0)
     {
         _glfwInputError(GLFW_PLATFORM_ERROR,
-                        "Wayland: Creating a buffer file for %d B failed: %%m",
-                        length);
+                        "Wayland: Creating a buffer file for %d B failed: %s",
+                        length, strerror(errno));
         return NULL;
     }
 
@@ -251,7 +260,7 @@ static struct wl_buffer* createShmBuffer(const GLFWimage* image)
     if (data == MAP_FAILED)
     {
         _glfwInputError(GLFW_PLATFORM_ERROR,
-                        "Wayland: mmap failed: %%m");
+                        "Wayland: mmap failed: %s", strerror(errno));
         close(fd);
         return NULL;
     }
@@ -1269,12 +1278,12 @@ void _glfwPlatformSetCursorMode(_GLFWwindow* window, int mode UNUSED)
     _glfwPlatformSetCursor(window, window->wl.currentCursor);
 }
 
-const char* _glfwPlatformGetScancodeName(int scancode)
+const char* _glfwPlatformGetNativeKeyName(int native_key)
 {
-    return glfw_xkb_keysym_name(scancode);
+    return glfw_xkb_keysym_name(native_key);
 }
 
-int _glfwPlatformGetKeyScancode(int key)
+int _glfwPlatformGetNativeKeyForKey(int key)
 {
     return glfw_xkb_sym_for_key(key);
 }
@@ -2032,7 +2041,7 @@ GLFWAPI struct wl_surface* glfwGetWaylandWindow(GLFWwindow* handle)
     return window->wl.surface;
 }
 
-GLFWAPI int glfwGetXKBScancode(const char* keyName, bool caseSensitive) {
+GLFWAPI int glfwGetNativeKeyForName(const char* keyName, bool caseSensitive) {
     return glfw_xkb_keysym_from_name(keyName, caseSensitive);
 }
 

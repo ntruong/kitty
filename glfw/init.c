@@ -214,10 +214,11 @@ _glfwDebug(const char *format, ...) {
 //////                        GLFW public API                       //////
 //////////////////////////////////////////////////////////////////////////
 
-GLFWAPI int glfwInit(void)
+GLFWAPI int glfwInit(monotonic_t start_time)
 {
     if (_glfw.initialized)
         return true;
+    monotonic_start_time = start_time;
 
     memset(&_glfw, 0, sizeof(_glfw));
     _glfw.hints.init = _glfwInitHints;
@@ -239,7 +240,6 @@ GLFWAPI int glfwInit(void)
     _glfwPlatformSetTls(&_glfw.errorSlot, &_glfwMainThreadError);
 
     _glfw.initialized = true;
-    _glfw.timer.offset = _glfwPlatformGetTimerValue();
 
     glfwDefaultWindowHints();
 

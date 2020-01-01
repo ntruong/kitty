@@ -109,7 +109,7 @@ static size_t reaped_pids_count = 0;
 #define INCREF_CHILD(x) XREF_CHILD(x, Py_INCREF)
 #define DECREF_CHILD(x) XREF_CHILD(x, Py_DECREF)
 
-// The max time (in secs) to wait for events from the window system
+// The max time to wait for events from the window system
 // before ticking over the main loop. Negative values mean wait forever.
 static monotonic_t maximum_wait = -1;
 
@@ -633,7 +633,7 @@ draw_resizing_text(OSWindow *w) {
     snprintf(text, sizeof(text), "%u x %u cells", width / w->fonts_data->cell_width, height / w->fonts_data->cell_height);
     StringCanvas rendered = render_simple_text(w->fonts_data, text);
     if (rendered.canvas) {
-        draw_centered_alpha_mask(w->gvao_idx, width, height, rendered.width, rendered.height, rendered.canvas);
+        draw_centered_alpha_mask(w, width, height, rendered.width, rendered.height, rendered.canvas);
         free(rendered.canvas);
     }
 }
@@ -649,7 +649,7 @@ static inline void
 render(monotonic_t now, bool input_read) {
     EVDBG("input_read: %d", input_read);
     static monotonic_t last_render_at = MONOTONIC_T_MIN;
-    monotonic_t time_since_last_render = now - last_render_at;
+    monotonic_t time_since_last_render = last_render_at == MONOTONIC_T_MIN ? OPT(repaint_delay) : now - last_render_at;
     if (!input_read && time_since_last_render < OPT(repaint_delay)) {
         set_maximum_wait(OPT(repaint_delay) - time_since_last_render);
         return;
@@ -916,10 +916,14 @@ process_global_state(void *data) {
     ChildMonitor *self = data;
     maximum_wait = -1;
     bool state_check_timer_enabled = false;
+    bool input_read = false;
 
     monotonic_t now = monotonic();
-    if (global_state.has_pending_resizes) process_pending_resizes(now);
-    bool input_read = parse_input(self);
+    if (global_state.has_pending_resizes) {
+        process_pending_resizes(now);
+        input_read = true;
+    }
+    if (parse_input(self)) input_read = true;
     render(now, input_read);
 #ifdef __APPLE__
         if (cocoa_pending_actions) {

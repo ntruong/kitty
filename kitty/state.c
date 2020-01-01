@@ -99,6 +99,19 @@ add_tab(id_type os_window_id) {
     return 0;
 }
 
+static inline void
+create_gpu_resources_for_window(Window *w) {
+    w->render_data.vao_idx = create_cell_vao();
+    w->render_data.gvao_idx = create_graphics_vao();
+}
+
+static inline void
+release_gpu_resources_for_window(Window *w) {
+    remove_vao(w->render_data.vao_idx); remove_vao(w->render_data.gvao_idx);
+    w->render_data.vao_idx = 0; w->render_data.gvao_idx = 0;
+}
+
+
 static inline id_type
 add_window(id_type os_window_id, id_type tab_id, PyObject *title) {
     WITH_TAB(os_window_id, tab_id);
@@ -108,8 +121,7 @@ add_window(id_type os_window_id, id_type tab_id, PyObject *title) {
         tab->windows[tab->num_windows].id = ++global_state.window_id_counter;
         tab->windows[tab->num_windows].visible = true;
         tab->windows[tab->num_windows].title = title;
-        tab->windows[tab->num_windows].render_data.vao_idx = create_cell_vao();
-        tab->windows[tab->num_windows].render_data.gvao_idx = create_graphics_vao();
+        create_gpu_resources_for_window(&tab->windows[tab->num_windows]);
         Py_INCREF(tab->windows[tab->num_windows].title);
         return tab->windows[tab->num_windows++].id;
     END_WITH_TAB;
@@ -133,7 +145,7 @@ update_window_title(id_type os_window_id, id_type tab_id, id_type window_id, PyO
 static inline void
 destroy_window(Window *w) {
     Py_CLEAR(w->render_data.screen); Py_CLEAR(w->title);
-    remove_vao(w->render_data.vao_idx); remove_vao(w->render_data.gvao_idx);
+    release_gpu_resources_for_window(w);
 }
 
 static inline void
@@ -146,6 +158,71 @@ remove_window(id_type os_window_id, id_type tab_id, id_type id) {
     WITH_TAB(os_window_id, tab_id);
         make_os_window_context_current(osw);
         remove_window_inner(tab, id);
+    END_WITH_TAB;
+}
+
+typedef struct {
+    unsigned int num_windows, capacity;
+    Window *windows;
+} DetachedWindows;
+
+static DetachedWindows detached_windows = {0};
+
+
+static void
+add_detached_window(Window *w) {
+    ensure_space_for(&detached_windows, windows, Window, detached_windows.num_windows + 1, capacity, 8, true);
+    memcpy(detached_windows.windows + detached_windows.num_windows++, w, sizeof(Window));
+}
+
+static inline void
+detach_window(id_type os_window_id, id_type tab_id, id_type id) {
+    WITH_TAB(os_window_id, tab_id);
+        for (size_t i = 0; i < tab->num_windows; i++) {
+            if (tab->windows[i].id == id) {
+                make_os_window_context_current(osw);
+                release_gpu_resources_for_window(&tab->windows[i]);
+                add_detached_window(tab->windows + i);
+                zero_at_i(tab->windows, i);
+                remove_i_from_array(tab->windows, i, tab->num_windows);
+                break;
+            }
+        }
+    END_WITH_TAB;
+}
+
+
+static inline void
+resize_screen(OSWindow *os_window, Screen *screen, bool has_graphics) {
+    if (screen) {
+        screen->cell_size.width = os_window->fonts_data->cell_width;
+        screen->cell_size.height = os_window->fonts_data->cell_height;
+        screen_dirty_sprite_positions(screen);
+        if (has_graphics) screen_rescale_images(screen);
+    }
+}
+
+static inline void
+attach_window(id_type os_window_id, id_type tab_id, id_type id) {
+    WITH_TAB(os_window_id, tab_id);
+        for (size_t i = 0; i < detached_windows.num_windows; i++) {
+            if (detached_windows.windows[i].id == id) {
+                ensure_space_for(tab, windows, Window, tab->num_windows + 1, capacity, 1, true);
+                Window *w = tab->windows + tab->num_windows++;
+                memcpy(w, detached_windows.windows + i, sizeof(Window));
+                zero_at_i(detached_windows.windows, i);
+                remove_i_from_array(detached_windows.windows, i, detached_windows.num_windows);
+                make_os_window_context_current(osw);
+                create_gpu_resources_for_window(w);
+                if (
+                    w->render_data.screen->cell_size.width != osw->fonts_data->cell_width ||
+                    w->render_data.screen->cell_size.height != osw->fonts_data->cell_height
+                ) resize_screen(osw, w->render_data.screen, true);
+                else screen_dirty_sprite_positions(w->render_data.screen);
+                w->render_data.screen->reload_all_gpu_data = true;
+                break;
+            }
+        }
     END_WITH_TAB;
 }
 
@@ -685,16 +762,6 @@ PYWRAP1(global_font_size) {
     return Py_BuildValue("d", global_state.font_sz_in_pts);
 }
 
-static inline void
-resize_screen(OSWindow *os_window, Screen *screen, bool has_graphics) {
-    if (screen) {
-        screen->cell_size.width = os_window->fonts_data->cell_width;
-        screen->cell_size.height = os_window->fonts_data->cell_height;
-        screen_dirty_sprite_positions(screen);
-        if (has_graphics) screen_rescale_images(screen);
-    }
-}
-
 PYWRAP1(os_window_font_size) {
     id_type os_window_id;
     int force = 0;
@@ -753,6 +820,8 @@ PYWRAP0(destroy_global_data) {
 
 THREE_ID_OBJ(update_window_title)
 THREE_ID(remove_window)
+THREE_ID(detach_window)
+THREE_ID(attach_window)
 PYWRAP1(resolve_key_mods) { int mods; PA("ii", &kitty_mod, &mods); return PyLong_FromLong(resolve_mods(mods)); }
 PYWRAP1(add_tab) { return PyLong_FromUnsignedLongLong(add_tab(PyLong_AsUnsignedLongLong(args))); }
 PYWRAP1(add_window) { PyObject *title; id_type a, b; PA("KKO", &a, &b, &title); return PyLong_FromUnsignedLongLong(add_window(a, b, title)); }
@@ -780,6 +849,8 @@ static PyMethodDef module_methods[] = {
     MW(update_window_title, METH_VARARGS),
     MW(remove_tab, METH_VARARGS),
     MW(remove_window, METH_VARARGS),
+    MW(detach_window, METH_VARARGS),
+    MW(attach_window, METH_VARARGS),
     MW(set_active_tab, METH_VARARGS),
     MW(set_active_window, METH_VARARGS),
     MW(swap_tabs, METH_VARARGS),
@@ -805,6 +876,15 @@ static PyMethodDef module_methods[] = {
     {NULL, NULL, 0, NULL}        /* Sentinel */
 };
 
+static void
+finalize(void) {
+    while(detached_windows.num_windows--) {
+        destroy_window(&detached_windows.windows[detached_windows.num_windows]);
+    }
+    if (detached_windows.windows) free(detached_windows.windows);
+    detached_windows.capacity = 0;
+}
+
 bool
 init_state(PyObject *module) {
     global_state.font_sz_in_pts = 11.0;
@@ -818,6 +898,10 @@ init_state(PyObject *module) {
     if (PyStructSequence_InitType2(&RegionType, &region_desc) != 0) return false;
     Py_INCREF((PyObject *) &RegionType);
     PyModule_AddObject(module, "Region", (PyObject *) &RegionType);
+    if (Py_AtExit(finalize) != 0) {
+        PyErr_SetString(PyExc_RuntimeError, "Failed to register the state at exit handler");
+        return false;
+    }
     return true;
 }
 // }}}

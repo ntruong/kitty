@@ -73,14 +73,19 @@ find_app_name(void) {
 
 @implementation GlobalMenuTarget
 
-- (void) show_preferences              : (id)sender {
+- (void)show_preferences:(id)sender {
     (void)sender;
     set_cocoa_pending_action(PREFERENCES_WINDOW, NULL);
 }
 
-- (void) new_os_window              : (id)sender {
+- (void)new_os_window:(id)sender {
     (void)sender;
     set_cocoa_pending_action(NEW_OS_WINDOW, NULL);
+}
+
+- (void)open_kitty_website_url:(id)sender {
+    (void)sender;
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL URLWithString:@"https://sw.kovidgoyal.net/kitty/"]];
 }
 
 
@@ -97,7 +102,7 @@ find_app_name(void) {
 
 @end
 
-static unichar new_window_key = 0;
+static char new_window_key[32] = {0};
 static NSEventModifierFlags new_window_mods = 0;
 
 static PyObject*
@@ -105,9 +110,9 @@ cocoa_set_new_window_trigger(PyObject *self UNUSED, PyObject *args) {
     int mods, key;
     if (!PyArg_ParseTuple(args, "ii", &mods, &key)) return NULL;
     int nwm;
-    get_cocoa_key_equivalent(key, mods, &new_window_key, &nwm);
+    get_cocoa_key_equivalent(key, mods, new_window_key, sizeof(new_window_key), &nwm);
     new_window_mods = nwm;
-    if (new_window_key) Py_RETURN_TRUE;
+    if (new_window_key[0]) Py_RETURN_TRUE;
     Py_RETURN_FALSE;
 }
 
@@ -118,10 +123,10 @@ get_dock_menu(id self UNUSED, SEL _cmd UNUSED, NSApplication *sender UNUSED) {
     if (!dockMenu) {
         GlobalMenuTarget *global_menu_target = [GlobalMenuTarget shared_instance];
         dockMenu = [[NSMenu alloc] init];
-        NSMenuItem *newWindowItem = [dockMenu addItemWithTitle:@"New OS window"
-                            action:@selector(new_os_window:)
-                            keyEquivalent:@""];
-        [newWindowItem setTarget:global_menu_target];
+        [[dockMenu addItemWithTitle:@"New OS window"
+                             action:@selector(new_os_window:)
+                      keyEquivalent:@""]
+                          setTarget:global_menu_target];
     }
     return dockMenu;
 }
@@ -232,41 +237,41 @@ cocoa_send_notification(PyObject *self UNUSED, PyObject *args) {
 // global menu {{{
 void
 cocoa_create_global_menu(void) {
-    @autoreleasepool {
-
     NSString* app_name = find_app_name();
     NSMenu* bar = [[NSMenu alloc] init];
     GlobalMenuTarget *global_menu_target = [GlobalMenuTarget shared_instance];
     [NSApp setMainMenu:bar];
 
     NSMenuItem* appMenuItem =
-        [bar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
+        [bar addItemWithTitle:@""
+                       action:NULL
+                keyEquivalent:@""];
     NSMenu* appMenu = [[NSMenu alloc] init];
     [appMenuItem setSubmenu:appMenu];
 
     [appMenu addItemWithTitle:[NSString stringWithFormat:@"About %@", app_name]
                        action:@selector(orderFrontStandardAboutPanel:)
-                       keyEquivalent:@""];
+                keyEquivalent:@""];
     [appMenu addItem:[NSMenuItem separatorItem]];
-    NSMenuItem* preferences_menu_item = [[NSMenuItem alloc] initWithTitle:@"Preferences..." action:@selector(show_preferences:) keyEquivalent:@","], *new_os_window_menu_item = NULL;
-    [preferences_menu_item setTarget:global_menu_target];
-    [appMenu addItem:preferences_menu_item];
-    if (new_window_key) {
-        NSString *s = [NSString stringWithCharacters:&new_window_key length:1];
-        new_os_window_menu_item = [[NSMenuItem alloc] initWithTitle:@"New OS window" action:@selector(new_os_window:) keyEquivalent:s];
-        [new_os_window_menu_item setKeyEquivalentModifierMask:new_window_mods];
-        [new_os_window_menu_item setTarget:global_menu_target];
-        [appMenu addItem:new_os_window_menu_item];
-        [s release];
-    }
+    [[appMenu addItemWithTitle:@"Preferences..."
+                       action:@selector(show_preferences:)
+                keyEquivalent:@","]
+                    setTarget:global_menu_target];
+
+    NSMenuItem* new_os_window_menu_item =
+        [appMenu addItemWithTitle:@"New OS window"
+                           action:@selector(new_os_window:)
+                    keyEquivalent:@(new_window_key)];
+    [new_os_window_menu_item setKeyEquivalentModifierMask:new_window_mods];
+    [new_os_window_menu_item setTarget:global_menu_target];
 
 
     [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", app_name]
                        action:@selector(hide:)
                 keyEquivalent:@"h"];
     [[appMenu addItemWithTitle:@"Hide Others"
-                       action:@selector(hideOtherApplications:)
-                keyEquivalent:@"h"]
+                        action:@selector(hideOtherApplications:)
+                 keyEquivalent:@"h"]
         setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
     [appMenu addItemWithTitle:@"Show All"
                        action:@selector(unhideAllApplications:)
@@ -276,19 +281,21 @@ cocoa_create_global_menu(void) {
     NSMenu* servicesMenu = [[NSMenu alloc] init];
     [NSApp setServicesMenu:servicesMenu];
     [[appMenu addItemWithTitle:@"Services"
-                       action:NULL
-                keyEquivalent:@""] setSubmenu:servicesMenu];
+                        action:NULL
+                 keyEquivalent:@""] setSubmenu:servicesMenu];
     [servicesMenu release];
 
     [appMenu addItem:[NSMenuItem separatorItem]];
 
     [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", app_name]
                        action:@selector(terminate:)
-                       keyEquivalent:@"q"];
+                keyEquivalent:@"q"];
     [appMenu release];
 
     NSMenuItem* windowMenuItem =
-        [bar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
+        [bar addItemWithTitle:@""
+                       action:NULL
+                keyEquivalent:@""];
     NSMenu* windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
     [windowMenuItem setSubmenu:windowMenu];
 
@@ -310,28 +317,34 @@ cocoa_create_global_menu(void) {
      setKeyEquivalentModifierMask:NSEventModifierFlagControl | NSEventModifierFlagCommand];
     [NSApp setWindowsMenu:windowMenu];
     [windowMenu release];
-    [preferences_menu_item release];
-    if (new_os_window_menu_item) {
-        [new_os_window_menu_item release];
-    }
+
+    NSMenuItem* helpMenuItem =
+        [bar addItemWithTitle:@"Help"
+                       action:NULL
+                keyEquivalent:@""];
+    NSMenu* helpMenu = [[NSMenu alloc] initWithTitle:@"Help"];
+    [helpMenuItem setSubmenu:helpMenu];
+    [[helpMenu addItemWithTitle:[NSString stringWithFormat:@"Visit %@ website", app_name]
+                         action:@selector(open_kitty_website_url:)
+                  keyEquivalent:@"?"]
+                      setTarget:global_menu_target];
+    [helpMenu release];
 
     [bar release];
 
     class_addMethod(
-            object_getClass([NSApp delegate]),
-            @selector(applicationDockMenu:),
-            (IMP)get_dock_menu,
-            "@@:@");
+        object_getClass([NSApp delegate]),
+        @selector(applicationDockMenu:),
+        (IMP)get_dock_menu,
+        "@@:@");
 
 
     [NSApp setServicesProvider:[[[ServiceProvider alloc] init] autorelease]];
-
-    } // autoreleasepool
 }
 
 void
 cocoa_update_menu_bar_title(PyObject *pytitle) {
-    NSString *title = [[NSString alloc] initWithUTF8String:PyUnicode_AsUTF8(pytitle)];
+    NSString *title = @(PyUnicode_AsUTF8(pytitle));
     NSMenu *bar = [NSApp mainMenu];
     if (title_menu != NULL) {
         [bar removeItem:title_menu];
@@ -340,7 +353,6 @@ cocoa_update_menu_bar_title(PyObject *pytitle) {
     NSMenu *m = [[NSMenu alloc] initWithTitle:[NSString stringWithFormat:@" :: %@", title]];
     [title_menu setSubmenu:m];
     [m release];
-    [title release];
 } // }}}
 
 bool
@@ -368,7 +380,7 @@ cocoa_make_window_resizable(void *w, bool resizable) {
 bool
 cocoa_alt_option_key_pressed(NSUInteger flags) {
     NSUInteger q = (OPT(macos_option_as_alt) == 1) ? NSRightAlternateKeyMask : NSLeftAlternateKeyMask;
-    return ((q & flags) == q) ? true : false;
+    return (q & flags) == q;
 }
 
 void
@@ -474,7 +486,6 @@ cleanup() {
     dockMenu = nil;
     if (notification_activated_callback) Py_DECREF(notification_activated_callback);
     notification_activated_callback = NULL;
-
     } // autoreleasepool
 }
 

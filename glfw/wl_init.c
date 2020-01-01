@@ -137,6 +137,7 @@ static void pointerHandleLeave(void* data UNUSED,
     _glfw.wl.pointerSerial = serial;
     _glfw.wl.pointerFocus = NULL;
     _glfwInputCursorEnter(window, false);
+    _glfw.wl.cursorPreviousShape = GLFW_INVALID_CURSOR;
 }
 
 static void setCursor(GLFWCursorShape shape)
@@ -165,6 +166,7 @@ static void setCursor(GLFWCursorShape shape)
     wl_surface_damage(surface, 0, 0,
                       image->width, image->height);
     wl_surface_commit(surface);
+    _glfw.wl.cursorPreviousShape = shape;
 }
 
 static void pointerHandleMotion(void* data UNUSED,
@@ -175,43 +177,46 @@ static void pointerHandleMotion(void* data UNUSED,
 {
     _GLFWwindow* window = _glfw.wl.pointerFocus;
     GLFWCursorShape cursorShape = GLFW_ARROW_CURSOR;
+    double x, y;
 
     if (!window)
         return;
 
     if (window->cursorMode == GLFW_CURSOR_DISABLED)
         return;
-    window->wl.cursorPosX = wl_fixed_to_double(sx);
-    window->wl.cursorPosY = wl_fixed_to_double(sy);
+    x = wl_fixed_to_double(sx);
+    y = wl_fixed_to_double(sy);
 
     switch (window->wl.decorations.focus)
     {
         case mainWindow:
-            _glfwInputCursorPos(window,
-                                window->wl.cursorPosX, window->wl.cursorPosY);
+            window->wl.cursorPosX = x;
+            window->wl.cursorPosY = y;
+            _glfwInputCursorPos(window, x, y);
+            _glfw.wl.cursorPreviousShape = GLFW_INVALID_CURSOR;
             return;
         case topDecoration:
-            if (window->wl.cursorPosY < _GLFW_DECORATION_WIDTH)
+            if (y < _GLFW_DECORATION_WIDTH)
                 cursorShape = GLFW_VRESIZE_CURSOR;
             else
                 cursorShape = GLFW_ARROW_CURSOR;
             break;
         case leftDecoration:
-            if (window->wl.cursorPosY < _GLFW_DECORATION_WIDTH)
+            if (y < _GLFW_DECORATION_WIDTH)
                 cursorShape = GLFW_NW_RESIZE_CURSOR;
             else
                 cursorShape = GLFW_HRESIZE_CURSOR;
             break;
         case rightDecoration:
-            if (window->wl.cursorPosY < _GLFW_DECORATION_WIDTH)
+            if (y < _GLFW_DECORATION_WIDTH)
                 cursorShape = GLFW_NE_RESIZE_CURSOR;
             else
                 cursorShape = GLFW_HRESIZE_CURSOR;
             break;
         case bottomDecoration:
-            if (window->wl.cursorPosX < _GLFW_DECORATION_WIDTH)
+            if (x < _GLFW_DECORATION_WIDTH)
                 cursorShape = GLFW_SW_RESIZE_CURSOR;
-            else if (window->wl.cursorPosX > window->wl.width + _GLFW_DECORATION_WIDTH)
+            else if (x > window->wl.width + _GLFW_DECORATION_WIDTH)
                 cursorShape = GLFW_SE_RESIZE_CURSOR;
             else
                 cursorShape = GLFW_VRESIZE_CURSOR;
@@ -219,7 +224,8 @@ static void pointerHandleMotion(void* data UNUSED,
         default:
             assert(0);
     }
-    setCursor(cursorShape);
+    if (_glfw.wl.cursorPreviousShape != cursorShape)
+        setCursor(cursorShape);
 }
 
 static void pointerHandleButton(void* data UNUSED,
@@ -368,7 +374,7 @@ static void keyboardHandleEnter(void* data UNUSED,
                                 struct wl_keyboard* keyboard UNUSED,
                                 uint32_t serial UNUSED,
                                 struct wl_surface* surface,
-                                struct wl_array* keys UNUSED)
+                                struct wl_array* keys)
 {
     // Happens in the case we just destroyed the surface.
     if (!surface)
@@ -384,6 +390,15 @@ static void keyboardHandleEnter(void* data UNUSED,
 
     _glfw.wl.keyboardFocus = window;
     _glfwInputWindowFocus(window, true);
+    uint32_t* key;
+    if (keys && _glfw.wl.keyRepeatInfo.key) {
+        wl_array_for_each(key, keys) {
+            if (*key == _glfw.wl.keyRepeatInfo.key) {
+                toggleTimer(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, 1);
+                break;
+            }
+        }
+    }
 }
 
 static void keyboardHandleLeave(void* data UNUSED,
@@ -398,6 +413,7 @@ static void keyboardHandleLeave(void* data UNUSED,
 
     _glfw.wl.keyboardFocus = NULL;
     _glfwInputWindowFocus(window, false);
+    toggleTimer(&_glfw.wl.eventLoopData, _glfw.wl.keyRepeatInfo.keyRepeatTimer, 0);
 }
 
 static void
@@ -422,6 +438,7 @@ static void keyboardHandleKey(void* data UNUSED,
     int action = state == WL_KEYBOARD_KEY_STATE_PRESSED ? GLFW_PRESS : GLFW_RELEASE;
     glfw_xkb_handle_key_event(window, &_glfw.wl.xkb, key, action);
     bool repeatable = false;
+    _glfw.wl.keyRepeatInfo.key = 0;
 
     if (action == GLFW_PRESS && _glfw.wl.keyboardRepeatRate > 0 && glfw_xkb_should_repeat(&_glfw.wl.xkb, key))
     {
@@ -608,8 +625,7 @@ static void registryHandleGlobal(void* data UNUSED,
             _glfwSetupWaylandDataDevice();
         }
     }
-    else if (strcmp(interface, "zwp_primary_selection_device_manager_v1") == 0 ||
-        strcmp(interface, "gtk_primary_selection_device_manager") == 0)
+    else if (strcmp(interface, "zwp_primary_selection_device_manager_v1") == 0)
     {
         _glfw.wl.primarySelectionDeviceManager =
             wl_registry_bind(registry, name,
@@ -750,7 +766,6 @@ int _glfwPlatformInit(void)
     }
 #endif
 
-    _glfwInitTimerPOSIX();
     if (!_glfw.wl.wmBase)
     {
         _glfwInputError(GLFW_PLATFORM_ERROR,

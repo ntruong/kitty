@@ -257,10 +257,10 @@ static bool parseMapping(_GLFWmapping* mapping, const char* string)
 //////                         GLFW event API                       //////
 //////////////////////////////////////////////////////////////////////////
 
-void _glfwInitializeKeyEvent(GLFWkeyevent *ev, int key, int scancode, int action, int mods)
+void _glfwInitializeKeyEvent(GLFWkeyevent *ev, int key, int native_key, int action, int mods)
 {
     ev->key = key;
-    ev->scancode = scancode;
+    ev->native_key = native_key;
     ev->action = action;
     ev->mods = mods;
     ev->text = NULL;
@@ -510,6 +510,7 @@ const char* _glfwGetKeyName(int key)
         case GLFW_KEY_LEFT_BRACKET:       return "LEFT_BRACKET";
         case GLFW_KEY_BACKSLASH:          return "BACKSLASH";
         case GLFW_KEY_RIGHT_BRACKET:      return "RIGHT_BRACKET";
+        case GLFW_KEY_CIRCUMFLEX:         return "CIRCUMFLEX";
         case GLFW_KEY_UNDERSCORE:         return "UNDERSCORE";
         case GLFW_KEY_GRAVE_ACCENT:       return "GRAVE_ACCENT";
         case GLFW_KEY_WORLD_1:            return "WORLD_1";
@@ -756,7 +757,7 @@ GLFWAPI void glfwSetInputMode(GLFWwindow* handle, int mode, int value)
         _glfwInputError(GLFW_INVALID_ENUM, "Invalid input mode 0x%08X", mode);
 }
 
-GLFWAPI const char* glfwGetKeyName(int key, int scancode)
+GLFWAPI const char* glfwGetKeyName(int key, int native_key)
 {
     _GLFW_REQUIRE_INIT_OR_RETURN(NULL);
 
@@ -769,13 +770,13 @@ GLFWAPI const char* glfwGetKeyName(int key, int scancode)
             return NULL;
         }
 
-        scancode = _glfwPlatformGetKeyScancode(key);
+        native_key = _glfwPlatformGetNativeKeyForKey(key);
     }
 
-    return _glfwPlatformGetScancodeName(scancode);
+    return _glfwPlatformGetNativeKeyName(native_key);
 }
 
-GLFWAPI int glfwGetKeyScancode(int key)
+GLFWAPI int glfwGetNativeKeyForKey(int key)
 {
     _GLFW_REQUIRE_INIT_OR_RETURN(-1);
 
@@ -785,7 +786,7 @@ GLFWAPI int glfwGetKeyScancode(int key)
         return GLFW_RELEASE;
     }
 
-    return _glfwPlatformGetKeyScancode(key);
+    return _glfwPlatformGetNativeKeyForKey(key);
 }
 
 GLFWAPI int glfwGetKey(GLFWwindow* handle, int key)
@@ -1482,29 +1483,4 @@ GLFWAPI monotonic_t glfwGetTime(void)
 {
     _GLFW_REQUIRE_INIT_OR_RETURN(0);
     return monotonic();
-}
-
-GLFWAPI void glfwSetTime(monotonic_t time)
-{
-    _GLFW_REQUIRE_INIT();
-
-    if (time < 0)
-    {
-        _glfwInputError(GLFW_INVALID_VALUE, "Invalid time %f", monotonic_t_to_s_double(time));
-        return;
-    }
-
-    // Do nothing
-}
-
-GLFWAPI uint64_t glfwGetTimerValue(void)
-{
-    _GLFW_REQUIRE_INIT_OR_RETURN(0);
-    return _glfwPlatformGetTimerValue();
-}
-
-GLFWAPI uint64_t glfwGetTimerFrequency(void)
-{
-    _GLFW_REQUIRE_INIT_OR_RETURN(0);
-    return _glfwPlatformGetTimerFrequency();
 }

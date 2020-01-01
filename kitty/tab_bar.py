@@ -18,11 +18,15 @@ from .rgb import alpha_blend, color_from_int
 TabBarData = namedtuple('TabBarData', 'title is_active needs_attention')
 DrawData = namedtuple(
     'DrawData', 'leading_spaces sep trailing_spaces bell_on_tab'
-    ' bell_fg alpha active_bg inactive_bg default_bg title_template')
+    ' bell_fg alpha active_fg active_bg inactive_fg inactive_bg'
+    ' default_bg title_template active_title_template')
 
 
 def as_rgb(x):
     return (x << 8) | 2
+
+
+template_failures = set()
 
 
 def draw_title(draw_data, screen, tab, index):
@@ -31,17 +35,20 @@ def draw_title(draw_data, screen, tab, index):
         screen.cursor.fg = draw_data.bell_fg
         screen.draw('🔔 ')
         screen.cursor.fg = fg
+    template = draw_data.title_template
+    if tab.is_active and draw_data.active_title_template is not None:
+        template = draw_data.active_title_template
     try:
-        title = draw_data.title_template.format(title=tab.title, index=index)
+        title = template.format(title=tab.title, index=index)
     except Exception as e:
-        if not hasattr(draw_title, 'template_failure_reported'):
-            draw_title.template_failure_reported = True
-            log_error('Invalid tab title template: "{}" with error: {}'.format(draw_data.title_template, e))
+        if template not in template_failures:
+            template_failures.add(template)
+            log_error('Invalid tab title template: "{}" with error: {}'.format(template, e))
         title = tab.title
     screen.draw(title)
 
 
-def draw_tab_with_separator(draw_data, screen, tab, before, max_title_length, index):
+def draw_tab_with_separator(draw_data, screen, tab, before, max_title_length, index, is_last):
     if draw_data.leading_spaces:
         screen.draw(' ' * draw_data.leading_spaces)
     draw_title(draw_data, screen, tab, index)
@@ -60,7 +67,7 @@ def draw_tab_with_separator(draw_data, screen, tab, before, max_title_length, in
     return end
 
 
-def draw_tab_with_fade(draw_data, screen, tab, before, max_title_length, index):
+def draw_tab_with_fade(draw_data, screen, tab, before, max_title_length, index, is_last):
     tab_bg = draw_data.active_bg if tab.is_active else draw_data.inactive_bg
     fade_colors = [as_rgb(color_as_int(alpha_blend(tab_bg, draw_data.default_bg, alpha))) for alpha in draw_data.alpha]
     for bg in fade_colors:
@@ -87,12 +94,63 @@ def draw_tab_with_fade(draw_data, screen, tab, before, max_title_length, index):
     return end
 
 
+def draw_tab_with_powerline(draw_data, screen, tab, before, max_title_length, index, is_last):
+    tab_bg = as_rgb(color_as_int(draw_data.active_bg if tab.is_active else draw_data.inactive_bg))
+    tab_fg = as_rgb(color_as_int(draw_data.active_fg if tab.is_active else draw_data.inactive_fg))
+    inactive_bg = as_rgb(color_as_int(draw_data.inactive_bg))
+    default_bg = as_rgb(color_as_int(draw_data.default_bg))
+
+    min_title_length = 1 + 2
+
+    if screen.cursor.x + min_title_length >= screen.columns:
+        screen.cursor.x -= 2
+        screen.cursor.bg = default_bg
+        screen.cursor.fg = inactive_bg
+        screen.draw('   ')
+        return screen.cursor.x
+
+    start_draw = 2
+    if tab.is_active and screen.cursor.x >= 2:
+        screen.cursor.x -= 2
+        screen.cursor.fg = inactive_bg
+        screen.cursor.bg = tab_bg
+        screen.draw(' ')
+        screen.cursor.fg = tab_fg
+    elif screen.cursor.x == 0:
+        screen.draw(' ')
+        start_draw = 1
+
+    if min_title_length >= max_title_length:
+        screen.draw('…')
+    else:
+        draw_title(draw_data, screen, tab, index)
+        extra = screen.cursor.x + start_draw - before - max_title_length
+        if extra > 0 and extra + 1 < screen.cursor.x:
+            screen.cursor.x -= extra + 1
+            screen.draw('…')
+
+    if tab.is_active or is_last:
+        screen.draw(' ')
+        screen.cursor.fg = tab_bg
+        if is_last:
+            screen.cursor.bg = default_bg
+        else:
+            screen.cursor.bg = inactive_bg
+        screen.draw('')
+    else:
+        screen.draw(' ')
+
+    end = screen.cursor.x
+    if end < screen.columns:
+        screen.draw(' ')
+    return end
+
+
 class TabBar:
 
     def __init__(self, os_window_id, opts):
         self.os_window_id = os_window_id
         self.opts = opts
-        draw_title.template = opts.tab_title_template
         self.num_tabs = 1
         self.margin_width = pt_to_px(self.opts.tab_bar_margin_width, self.os_window_id)
         self.cell_width, cell_height = cell_size_for_window(self.os_window_id)
@@ -123,10 +181,17 @@ class TabBar:
         self.bell_fg = as_rgb(0xff0000)
         self.draw_data = DrawData(
             self.leading_spaces, self.sep, self.trailing_spaces, self.opts.bell_on_tab, self.bell_fg,
-            self.opts.tab_fade, self.opts.active_tab_background, self.opts.inactive_tab_background,
-            self.opts.background, self.opts.tab_title_template
+            self.opts.tab_fade, self.opts.active_tab_foreground, self.opts.active_tab_background,
+            self.opts.inactive_tab_foreground, self.opts.inactive_tab_background,
+            self.opts.tab_bar_background or self.opts.background, self.opts.tab_title_template,
+            self.opts.active_tab_title_template
         )
-        self.draw_func = draw_tab_with_separator if self.opts.tab_bar_style == 'separator' else draw_tab_with_fade
+        if self.opts.tab_bar_style == 'separator':
+            self.draw_func = draw_tab_with_separator
+        elif self.opts.tab_bar_style == 'powerline':
+            self.draw_func = draw_tab_with_powerline
+        else:
+            self.draw_func = draw_tab_with_fade
 
     def patch_colors(self, spec):
         if 'active_tab_foreground' in spec:
@@ -136,7 +201,9 @@ class TabBar:
             self.draw_data = self.draw_data._replace(active_bg=color_from_int(spec['active_tab_background']))
         if 'inactive_tab_background' in spec:
             self.draw_data = self.draw_data._replace(inactive_bg=color_from_int(spec['inactive_tab_background']))
-        if 'background' in spec:
+        if 'tab_bar_background' in spec:
+            self.draw_data = self.draw_data._replace(default_bg=color_from_int(spec['tab_bar_background']))
+        elif 'background' in spec and not self.opts.tab_bar_background:
             self.draw_data = self.draw_data._replace(default_bg=color_from_int(spec['background']))
         self.screen.color_profile.set_configured_colors(
                 spec.get('inactive_tab_foreground', color_as_int(self.opts.inactive_tab_foreground)),
@@ -179,10 +246,13 @@ class TabBar:
             s.cursor.fg = self.active_fg if t.is_active else 0
             s.cursor.bold, s.cursor.italic = self.active_font_style if t.is_active else self.inactive_font_style
             before = s.cursor.x
-            end = self.draw_func(self.draw_data, s, t, before, max_title_length, i + 1)
+            end = self.draw_func(self.draw_data, s, t, before, max_title_length, i + 1, t is last_tab)
             cr.append((before, end))
             if s.cursor.x > s.columns - max_title_length and t is not last_tab:
-                s.draw('…')
+                s.cursor.x = s.columns - 2
+                s.cursor.bg = as_rgb(color_as_int(self.draw_data.default_bg))
+                s.cursor.fg = self.bell_fg
+                s.draw(' …')
                 break
         s.erase_in_line(0, False)  # Ensure no long titles bleed after the last tab
         self.cell_ranges = cr

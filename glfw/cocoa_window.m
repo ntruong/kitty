@@ -32,9 +32,6 @@
 #include <float.h>
 #include <string.h>
 
-// Needed for _NSGetProgname
-#include <crt_externs.h>
-
 
 #define PARAGRAPH_UTF_8                        0xc2a7 // §
 #define MASCULINE_UTF_8                        0xc2ba // º
@@ -94,15 +91,14 @@
 //
 static NSUInteger getStyleMask(_GLFWwindow* window)
 {
-    NSUInteger styleMask = 0;
+    NSUInteger styleMask = NSWindowStyleMaskMiniaturizable;
 
     if (window->monitor || !window->decorated)
         styleMask |= NSWindowStyleMaskBorderless;
     else
     {
         styleMask |= NSWindowStyleMaskTitled |
-                     NSWindowStyleMaskClosable |
-                     NSWindowStyleMaskMiniaturizable;
+                     NSWindowStyleMaskClosable;
 
         if (window->resizable)
             styleMask |= NSWindowStyleMaskResizable;
@@ -330,8 +326,8 @@ format_text(const char *src) {
 }
 
 static const char*
-safe_name_for_scancode(unsigned int scancode) {
-    const char *ans = _glfwPlatformGetScancodeName(scancode);
+safe_name_for_keycode(unsigned int keycode) {
+    const char *ans = _glfwPlatformGetNativeKeyName(keycode);
     if (!ans) return "<noname>";
     if ((1 <= ans[0] && ans[0] <= 31) || ans[0] == 127) ans = "<cc>";
     return ans;
@@ -344,7 +340,7 @@ static int translateKey(unsigned int key, bool apply_keymap)
 {
     if (apply_keymap) {
         // Look for the effective key name after applying any keyboard layouts/mappings
-        const char *name_chars = _glfwPlatformGetScancodeName(key);
+        const char *name_chars = _glfwPlatformGetNativeKeyName(key);
         uint32_t name = 0;
         if (name_chars) {
             for (int i = 0; i < 4; i++) {
@@ -414,6 +410,7 @@ static int translateKey(unsigned int key, bool apply_keymap)
                 K('[', LEFT_BRACKET);
                 K('\\', BACKSLASH);
                 K(']', RIGHT_BRACKET);
+                K('^', CIRCUMFLEX);
                 K('_', UNDERSCORE);
                 K('`', GRAVE_ACCENT);
                 K(PARAGRAPH_UTF_8, PARAGRAPH);
@@ -479,17 +476,6 @@ static int translateKey(unsigned int key, bool apply_keymap)
         return GLFW_KEY_UNKNOWN;
 
     return _glfw.ns.keycodes[key];
-}
-
-static void
-display_reconfigured(CGDirectDisplayID display UNUSED, CGDisplayChangeSummaryFlags flags, void *userInfo UNUSED)
-{
-    if (flags & kCGDisplayBeginConfigurationFlag) {
-        return;
-    }
-    if (flags & kCGDisplaySetModeFlag) {
-        // GPU possibly changed
-    }
 }
 
 // Translate a GLFW keycode to a Cocoa modifier flag
@@ -662,77 +648,8 @@ static const NSRange kEmptyRange = { NSNotFound, 0 };
     }
 }
 
-
 @end // }}}
 
-// Delegate for application related notifications {{{
-
-@interface GLFWApplicationDelegate : NSObject
-@end
-
-@implementation GLFWApplicationDelegate
-
-- (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender
-{
-    (void)sender;
-    _GLFWwindow* window;
-
-    for (window = _glfw.windowListHead;  window;  window = window->next)
-        _glfwInputWindowCloseRequest(window);
-
-    return NSTerminateCancel;
-}
-
-static GLFWapplicationshouldhandlereopenfun handle_reopen_callback = NULL;
-
-- (BOOL)applicationShouldHandleReopen:(NSApplication *)sender hasVisibleWindows:(BOOL)flag
-{
-    (void)sender;
-    if (!handle_reopen_callback) return YES;
-    if (handle_reopen_callback(flag)) return YES;
-    return NO;
-}
-
-- (void)applicationDidChangeScreenParameters:(NSNotification *) notification
-{
-    (void)notification;
-    _GLFWwindow* window;
-
-    for (window = _glfw.windowListHead;  window;  window = window->next)
-    {
-        if (window->context.client != GLFW_NO_API)
-            [window->context.nsgl.object update];
-    }
-
-    _glfwPollMonitorsNS();
-}
-
-- (void)applicationDidFinishLaunching:(NSNotification *)notification
-{
-    (void)notification;
-    [NSApp stop:nil];
-
-    CGDisplayRegisterReconfigurationCallback(display_reconfigured, NULL);
-    _glfwCocoaPostEmptyEvent();
-}
-
-- (void)applicationWillTerminate:(NSNotification *)aNotification
-{
-    (void)aNotification;
-    CGDisplayRemoveReconfigurationCallback(display_reconfigured, NULL);
-}
-
-- (void)applicationDidHide:(NSNotification *)notification
-{
-    (void)notification;
-    int i;
-
-    for (i = 0;  i < _glfw.monitorCount;  i++)
-        _glfwRestoreVideoModeNS(_glfw.monitors[i]);
-}
-
-@end
-// }}}
 
 // Content view class for the GLFW window {{{
 
@@ -1048,16 +965,16 @@ is_ascii_control_char(char x) {
 
 - (void)keyDown:(NSEvent *)event
 {
-    const unsigned int scancode = [event keyCode];
+    const unsigned int keycode = [event keyCode];
     const NSUInteger flags = [event modifierFlags];
     const int mods = translateFlags(flags);
-    const int key = translateKey(scancode, true);
-    const bool process_text = !window->ns.textInputFilterCallback || window->ns.textInputFilterCallback(key, mods, scancode, flags) != 1;
+    const int key = translateKey(keycode, true);
+    const bool process_text = !window->ns.textInputFilterCallback || window->ns.textInputFilterCallback(key, mods, keycode, flags) != 1;
     const bool previous_has_marked_text = [self hasMarkedText];
     [self unmarkText];
     _glfw.ns.text[0] = 0;
     GLFWkeyevent glfw_keyevent;
-    _glfwInitializeKeyEvent(&glfw_keyevent, key, scancode, GLFW_PRESS, mods);
+    _glfwInitializeKeyEvent(&glfw_keyevent, key, keycode, GLFW_PRESS, mods);
     if (!_glfw.ns.unicodeData) {
         // Using the cocoa API for key handling is disabled, as there is no
         // reliable way to handle dead keys using it. Only use it if the
@@ -1072,7 +989,7 @@ is_ascii_control_char(char x) {
         const bool in_compose_sequence = window->ns.deadKeyState != 0;
         if (UCKeyTranslate(
                     [(NSData*) _glfw.ns.unicodeData bytes],
-                    scancode,
+                    keycode,
                     kUCKeyActionDown,
                     convert_cocoa_to_carbon_modifiers(flags),
                     LMGetKbdType(),
@@ -1082,20 +999,20 @@ is_ascii_control_char(char x) {
                     &char_count,
                     text
                     ) != noErr) {
-            debug_key(@"UCKeyTranslate failed for scancode: 0x%x (%@) %@\n",
-                    scancode, @(safe_name_for_scancode(scancode)), @(format_mods(mods)));
+            debug_key(@"UCKeyTranslate failed for keycode: 0x%x (%@) %@\n",
+                    keycode, @(safe_name_for_keycode(keycode)), @(format_mods(mods)));
             window->ns.deadKeyState = 0;
             return;
         }
-        debug_key(@"scancode: 0x%x (%@) %@char_count: %lu deadKeyState: %u repeat: %d",
-                scancode, @(safe_name_for_scancode(scancode)), @(format_mods(mods)), char_count, window->ns.deadKeyState, event.ARepeat);
+        debug_key(@"keycode: 0x%x (%@) %@char_count: %lu deadKeyState: %u repeat: %d",
+                keycode, @(safe_name_for_keycode(keycode)), @(format_mods(mods)), char_count, window->ns.deadKeyState, event.ARepeat);
         if (process_text) {
             // this will call insertText which will fill up _glfw.ns.text
             [self interpretKeyEvents:[NSArray arrayWithObject:event]];
         } else {
             window->ns.deadKeyState = 0;
         }
-        if (window->ns.deadKeyState && (char_count == 0 || scancode == 0x75)) {
+        if (window->ns.deadKeyState && (char_count == 0 || keycode == 0x75)) {
             // 0x75 is the delete key which needs to be ignored during a compose sequence
             debug_key(@"Sending pre-edit text for dead key (text: %@ markedText: %@).\n", @(format_text(_glfw.ns.text)), markedText);
             glfw_keyevent.text = [[markedText string] UTF8String];
@@ -1355,7 +1272,7 @@ void _glfwPlatformUpdateIMEState(_GLFWwindow *w, int which, int a, int b, int c,
 @end
 // }}}
 
-// GLFW Window class {{{
+// GLFW window class {{{
 
 @interface GLFWWindow : NSWindow {
     _GLFWwindow* glfw_window;
@@ -1408,154 +1325,6 @@ void _glfwPlatformUpdateIMEState(_GLFWwindow *w, int which, int a, int b, int c,
 @end
 // }}}
 
-// Set up the menu bar (manually)
-// This is nasty, nasty stuff -- calls to undocumented semi-private APIs that
-// could go away at any moment, lots of stuff that really should be
-// localize(d|able), etc.  Add a nib to save us this horror.
-//
-static void createMenuBar(void)
-{
-    size_t i;
-    NSString* appName = nil;
-    NSDictionary* bundleInfo = [[NSBundle mainBundle] infoDictionary];
-    NSString* nameKeys[] =
-    {
-        @"CFBundleDisplayName",
-        @"CFBundleName",
-        @"CFBundleExecutable",
-    };
-
-    // Try to figure out what the calling application is called
-
-    for (i = 0;  i < sizeof(nameKeys) / sizeof(nameKeys[0]);  i++)
-    {
-        id name = bundleInfo[nameKeys[i]];
-        if (name &&
-            [name isKindOfClass:[NSString class]] &&
-            ![name isEqualToString:@""])
-        {
-            appName = name;
-            break;
-        }
-    }
-
-    if (!appName)
-    {
-        char** progname = _NSGetProgname();
-        if (progname && *progname)
-            appName = @(*progname);
-        else
-            appName = @"GLFW Application";
-    }
-
-    NSMenu* bar = [[NSMenu alloc] init];
-    [NSApp setMainMenu:bar];
-
-    NSMenuItem* appMenuItem =
-        [bar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
-    NSMenu* appMenu = [[NSMenu alloc] init];
-    [appMenuItem setSubmenu:appMenu];
-
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"About %@", appName]
-                       action:@selector(orderFrontStandardAboutPanel:)
-                keyEquivalent:@""];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    NSMenu* servicesMenu = [[NSMenu alloc] init];
-    [NSApp setServicesMenu:servicesMenu];
-    [[appMenu addItemWithTitle:@"Services"
-                       action:NULL
-                keyEquivalent:@""] setSubmenu:servicesMenu];
-    [servicesMenu release];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Hide %@", appName]
-                       action:@selector(hide:)
-                keyEquivalent:@"h"];
-    [[appMenu addItemWithTitle:@"Hide Others"
-                       action:@selector(hideOtherApplications:)
-                keyEquivalent:@"h"]
-        setKeyEquivalentModifierMask:NSEventModifierFlagOption | NSEventModifierFlagCommand];
-    [appMenu addItemWithTitle:@"Show All"
-                       action:@selector(unhideAllApplications:)
-                keyEquivalent:@""];
-    [appMenu addItem:[NSMenuItem separatorItem]];
-    [appMenu addItemWithTitle:[NSString stringWithFormat:@"Quit %@", appName]
-                       action:@selector(terminate:)
-                keyEquivalent:@"q"];
-
-    NSMenuItem* windowMenuItem =
-        [bar addItemWithTitle:@"" action:NULL keyEquivalent:@""];
-    [bar release];
-    NSMenu* windowMenu = [[NSMenu alloc] initWithTitle:@"Window"];
-    [NSApp setWindowsMenu:windowMenu];
-    [windowMenuItem setSubmenu:windowMenu];
-
-    [windowMenu addItemWithTitle:@"Minimize"
-                          action:@selector(performMiniaturize:)
-                   keyEquivalent:@"m"];
-    [windowMenu addItemWithTitle:@"Zoom"
-                          action:@selector(performZoom:)
-                   keyEquivalent:@""];
-    [windowMenu addItem:[NSMenuItem separatorItem]];
-    [windowMenu addItemWithTitle:@"Bring All to Front"
-                          action:@selector(arrangeInFront:)
-                   keyEquivalent:@""];
-
-    // TODO: Make this appear at the bottom of the menu (for consistency)
-    [windowMenu addItem:[NSMenuItem separatorItem]];
-    [[windowMenu addItemWithTitle:@"Enter Full Screen"
-                           action:@selector(toggleFullScreen:)
-                    keyEquivalent:@"f"]
-     setKeyEquivalentModifierMask:NSEventModifierFlagControl | NSEventModifierFlagCommand];
-
-    // Prior to Snow Leopard, we need to use this oddly-named semi-private API
-    // to get the application menu working properly.
-    SEL setAppleMenuSelector = NSSelectorFromString(@"setAppleMenu:");
-    [NSApp performSelector:setAppleMenuSelector withObject:appMenu];
-}
-
-// Initialize the Cocoa Application Kit
-//
-static bool initializeAppKit(void)
-{
-    if (_glfw.ns.delegate)
-        return true;
-
-    // There can only be one application delegate, but we allocate it the
-    // first time a window is created to keep all window code in this file
-    _glfw.ns.delegate = [[GLFWApplicationDelegate alloc] init];
-    if (_glfw.ns.delegate == nil)
-    {
-        _glfwInputError(GLFW_PLATFORM_ERROR,
-                        "Cocoa: Failed to create application delegate");
-        return false;
-    }
-    [NSApp setDelegate:_glfw.ns.delegate];
-
-    if (_glfw.hints.init.ns.menubar)
-    {
-        // In case we are unbundled, make us a proper UI application
-        [NSApp setActivationPolicy:NSApplicationActivationPolicyRegular];
-
-        // Menu bar setup must go between sharedApplication above and
-        // finishLaunching below, in order to properly emulate the behavior
-        // of NSApplicationMain
-
-        // disabled by Kovid
-        /* if ([[NSBundle mainBundle] pathForResource:@"MainMenu" ofType:@"nib"]) */
-        /*     [NSApp loadMainMenu]; */
-        /* else */
-            createMenuBar();
-    }
-
-    [NSApp run];
-
-    // Press and Hold prevents some keys from emitting repeated characters
-    NSDictionary* defaults = @{@"ApplePressAndHoldEnabled":@NO};
-
-    [[NSUserDefaults standardUserDefaults] registerDefaults:defaults];
-
-    return true;
-}
 
 // Create the Cocoa window
 //
@@ -1603,7 +1372,7 @@ static bool createNativeWindow(_GLFWwindow* window,
         [window->ns.object setLevel:NSMainMenuWindowLevel + 1];
     else
     {
-        [(NSWindow*)window->ns.object center];
+        [(NSWindow*) window->ns.object center];
         _glfw.ns.cascadePoint =
             NSPointToCGPoint([window->ns.object cascadeTopLeftFromPoint:
                               NSPointFromCGPoint(_glfw.ns.cascadePoint)]);
@@ -1660,8 +1429,11 @@ int _glfwPlatformCreateWindow(_GLFWwindow* window,
                               const _GLFWfbconfig* fbconfig)
 {
     window->ns.deadKeyState = 0;
-    if (!initializeAppKit())
-        return false;
+    if (!_glfw.ns.finishedLaunching)
+    {
+        [NSApp run];
+        _glfw.ns.finishedLaunching = true;
+    }
 
     if (!createNativeWindow(window, wndconfig, fbconfig))
         return false;
@@ -1727,7 +1499,7 @@ void _glfwPlatformDestroyWindow(_GLFWwindow* window)
     window->ns.object = nil;
 }
 
-void _glfwPlatformSetWindowTitle(_GLFWwindow* window UNUSED, const char *title)
+void _glfwPlatformSetWindowTitle(_GLFWwindow* window UNUSED, const char* title)
 {
     NSString* string = @(title);
     [window->ns.object setTitle:string];
@@ -2124,14 +1896,14 @@ void _glfwPlatformSetCursorMode(_GLFWwindow* window, int mode UNUSED)
         updateCursorMode(window);
 }
 
-const char* _glfwPlatformGetScancodeName(int scancode)
+const char* _glfwPlatformGetNativeKeyName(int keycode)
 {
     UInt32 deadKeyState = 0;
     UniChar characters[8];
     UniCharCount characterCount = 0;
 
     if (UCKeyTranslate([(NSData*) _glfw.ns.unicodeData bytes],
-                       scancode,
+                       keycode,
                        kUCKeyActionDisplay,
                        0,
                        LMGetKbdType(),
@@ -2151,9 +1923,9 @@ const char* _glfwPlatformGetScancodeName(int scancode)
     return _glfw.ns.keyName;
 }
 
-int _glfwPlatformGetKeyScancode(int key)
+int _glfwPlatformGetNativeKeyForKey(int key)
 {
-    return _glfw.ns.scancodes[key];
+    return _glfw.ns.key_to_keycode[key];
 }
 
 int _glfwPlatformCreateCursor(_GLFWcursor* cursor,
@@ -2403,19 +2175,13 @@ GLFWAPI GLFWcocoatogglefullscreenfun glfwSetCocoaToggleFullscreenIntercept(GLFWw
     return previous;
 }
 
-GLFWAPI GLFWapplicationshouldhandlereopenfun glfwSetApplicationShouldHandleReopen(GLFWapplicationshouldhandlereopenfun callback) {
-    GLFWapplicationshouldhandlereopenfun previous = handle_reopen_callback;
-    handle_reopen_callback = callback;
-    return previous;
-}
-
 GLFWAPI void glfwCocoaRequestRenderFrame(GLFWwindow *w, GLFWcocoarenderframefun callback) {
     requestRenderFrame((_GLFWwindow*)w, callback);
 }
 
-GLFWAPI void glfwGetCocoaKeyEquivalent(int glfw_key, int glfw_mods, unsigned short *cocoa_key, int *cocoa_mods) {
-    *cocoa_key = 0;
+GLFWAPI void glfwGetCocoaKeyEquivalent(int glfw_key, int glfw_mods, char *cocoa_key, size_t key_sz, int *cocoa_mods) {
     *cocoa_mods = 0;
+    memset(cocoa_key, 0, key_sz);
 
     if (glfw_mods & GLFW_MOD_SHIFT)
         *cocoa_mods |= NSEventModifierFlagShift;
@@ -2428,146 +2194,155 @@ GLFWAPI void glfwGetCocoaKeyEquivalent(int glfw_key, int glfw_mods, unsigned sho
     if (glfw_mods & GLFW_MOD_CAPS_LOCK)
         *cocoa_mods |= NSEventModifierFlagCapsLock;
 
+    uint32_t utf_8_key = 0;
+    unichar utf_16_key = 0;
+
 START_ALLOW_CASE_RANGE
     switch(glfw_key) {
-#define K(ch, name) case GLFW_KEY_##name: *cocoa_key = ch; break;
-        K('!', EXCLAM);
-        K('"', DOUBLE_QUOTE);
-        K('#', NUMBER_SIGN);
-        K('$', DOLLAR);
-        K('&', AMPERSAND);
-        K('\'', APOSTROPHE);
-        K('(', PARENTHESIS_LEFT);
-        K(')', PARENTHESIS_RIGHT);
-        K('+', PLUS);
-        K(',', COMMA);
-        K('-', MINUS);
-        K('.', PERIOD);
-        K('/', SLASH);
-        K('0', 0);
-        K('1', 1);
-        K('2', 2);
-        K('3', 3);
-        K('5', 5);
-        K('6', 6);
-        K('7', 7);
-        K('8', 8);
-        K('9', 9);
-        K(':', COLON);
-        K(';', SEMICOLON);
-        K('<', LESS);
-        K('=', EQUAL);
-        K('>', GREATER);
-        K('@', AT);
-        K('[', LEFT_BRACKET);
-        K('\\', BACKSLASH);
-        K(']', RIGHT_BRACKET);
-        K('_', UNDERSCORE);
-        K('`', GRAVE_ACCENT);
-        K('a', A);
-        K('b', B);
-        K('c', C);
-        K('d', D);
-        K('e', E);
-        K('f', F);
-        K('g', G);
-        K('h', H);
-        K('i', I);
-        K('j', J);
-        K('k', K);
-        K('l', L);
-        K('m', M);
-        K('n', N);
-        K('o', O);
-        K('p', P);
-        K('q', Q);
-        K('r', R);
-        K('s', S);
-        K('t', T);
-        K('u', U);
-        K('v', V);
-        K('w', W);
-        K('x', X);
-        K('y', Y);
-        K('z', Z);
-        K(PARAGRAPH_UTF_8, PARAGRAPH);
-        K(MASCULINE_UTF_8, MASCULINE);
-        K(S_SHARP_UTF_8, S_SHARP);
-        K(A_GRAVE_LOWER_CASE_UTF_8, A_GRAVE);
-        K(A_DIAERESIS_LOWER_CASE_UTF_8, A_DIAERESIS);
-        K(A_RING_LOWER_CASE_UTF_8, A_RING);
-        K(AE_LOWER_CASE_UTF_8, AE);
-        K(C_CEDILLA_LOWER_CASE_UTF_8, C_CEDILLA);
-        K(E_GRAVE_LOWER_CASE_UTF_8, E_GRAVE);
-        K(E_ACUTE_LOWER_CASE_UTF_8, E_ACUTE);
-        K(I_GRAVE_LOWER_CASE_UTF_8, I_GRAVE);
-        K(N_TILDE_LOWER_CASE_UTF_8, N_TILDE);
-        K(O_GRAVE_LOWER_CASE_UTF_8, O_GRAVE);
-        K(O_DIAERESIS_LOWER_CASE_UTF_8, O_DIAERESIS);
-        K(O_SLASH_LOWER_CASE_UTF_8, O_SLASH);
-        K(U_GRAVE_LOWER_CASE_UTF_8, U_GRAVE);
-        K(U_DIAERESIS_LOWER_CASE_UTF_8, U_DIAERESIS);
-        K(CYRILLIC_A_LOWER_CASE_UTF_8, CYRILLIC_A);
-        K(CYRILLIC_BE_LOWER_CASE_UTF_8, CYRILLIC_BE);
-        K(CYRILLIC_VE_LOWER_CASE_UTF_8, CYRILLIC_VE);
-        K(CYRILLIC_GHE_LOWER_CASE_UTF_8, CYRILLIC_GHE);
-        K(CYRILLIC_DE_LOWER_CASE_UTF_8, CYRILLIC_DE);
-        K(CYRILLIC_IE_LOWER_CASE_UTF_8, CYRILLIC_IE);
-        K(CYRILLIC_ZHE_LOWER_CASE_UTF_8, CYRILLIC_ZHE);
-        K(CYRILLIC_ZE_LOWER_CASE_UTF_8, CYRILLIC_ZE);
-        K(CYRILLIC_I_LOWER_CASE_UTF_8, CYRILLIC_I);
-        K(CYRILLIC_SHORT_I_LOWER_CASE_UTF_8, CYRILLIC_SHORT_I);
-        K(CYRILLIC_KA_LOWER_CASE_UTF_8, CYRILLIC_KA);
-        K(CYRILLIC_EL_LOWER_CASE_UTF_8, CYRILLIC_EL);
-        K(CYRILLIC_EM_LOWER_CASE_UTF_8, CYRILLIC_EM);
-        K(CYRILLIC_EN_LOWER_CASE_UTF_8, CYRILLIC_EN);
-        K(CYRILLIC_O_LOWER_CASE_UTF_8, CYRILLIC_O);
-        K(CYRILLIC_PE_LOWER_CASE_UTF_8, CYRILLIC_PE);
-        K(CYRILLIC_ER_LOWER_CASE_UTF_8, CYRILLIC_ER);
-        K(CYRILLIC_ES_LOWER_CASE_UTF_8, CYRILLIC_ES);
-        K(CYRILLIC_TE_LOWER_CASE_UTF_8, CYRILLIC_TE);
-        K(CYRILLIC_U_LOWER_CASE_UTF_8, CYRILLIC_U);
-        K(CYRILLIC_EF_LOWER_CASE_UTF_8, CYRILLIC_EF);
-        K(CYRILLIC_HA_LOWER_CASE_UTF_8, CYRILLIC_HA);
-        K(CYRILLIC_TSE_LOWER_CASE_UTF_8, CYRILLIC_TSE);
-        K(CYRILLIC_CHE_LOWER_CASE_UTF_8, CYRILLIC_CHE);
-        K(CYRILLIC_SHA_LOWER_CASE_UTF_8, CYRILLIC_SHA);
-        K(CYRILLIC_SHCHA_LOWER_CASE_UTF_8, CYRILLIC_SHCHA);
-        K(CYRILLIC_HARD_SIGN_LOWER_CASE_UTF_8, CYRILLIC_HARD_SIGN);
-        K(CYRILLIC_YERU_LOWER_CASE_UTF_8, CYRILLIC_YERU);
-        K(CYRILLIC_SOFT_SIGN_LOWER_CASE_UTF_8, CYRILLIC_SOFT_SIGN);
-        K(CYRILLIC_E_LOWER_CASE_UTF_8, CYRILLIC_E);
-        K(CYRILLIC_YU_LOWER_CASE_UTF_8, CYRILLIC_YU);
-        K(CYRILLIC_YA_LOWER_CASE_UTF_8, CYRILLIC_YA);
-        K(CYRILLIC_IO_LOWER_CASE_UTF_8, CYRILLIC_IO);
+#define K8(ch, name) case GLFW_KEY_##name: utf_8_key = ch; break;
+#define K16(ch, name) case GLFW_KEY_##name: utf_16_key = ch; break;
+        K8('!', EXCLAM);
+        K8('"', DOUBLE_QUOTE);
+        K8('#', NUMBER_SIGN);
+        K8('$', DOLLAR);
+        K8('&', AMPERSAND);
+        K8('\'', APOSTROPHE);
+        K8('(', PARENTHESIS_LEFT);
+        K8(')', PARENTHESIS_RIGHT);
+        K8('+', PLUS);
+        K8(',', COMMA);
+        K8('-', MINUS);
+        K8('.', PERIOD);
+        K8('/', SLASH);
+        K8('0', 0);
+        K8('1', 1);
+        K8('2', 2);
+        K8('3', 3);
+        K8('5', 5);
+        K8('6', 6);
+        K8('7', 7);
+        K8('8', 8);
+        K8('9', 9);
+        K8(':', COLON);
+        K8(';', SEMICOLON);
+        K8('<', LESS);
+        K8('=', EQUAL);
+        K8('>', GREATER);
+        K8('@', AT);
+        K8('[', LEFT_BRACKET);
+        K8('\\', BACKSLASH);
+        K8(']', RIGHT_BRACKET);
+        K8('^', CIRCUMFLEX);
+        K8('_', UNDERSCORE);
+        K8('`', GRAVE_ACCENT);
+        K8('a', A);
+        K8('b', B);
+        K8('c', C);
+        K8('d', D);
+        K8('e', E);
+        K8('f', F);
+        K8('g', G);
+        K8('h', H);
+        K8('i', I);
+        K8('j', J);
+        K8('k', K);
+        K8('l', L);
+        K8('m', M);
+        K8('n', N);
+        K8('o', O);
+        K8('p', P);
+        K8('q', Q);
+        K8('r', R);
+        K8('s', S);
+        K8('t', T);
+        K8('u', U);
+        K8('v', V);
+        K8('w', W);
+        K8('x', X);
+        K8('y', Y);
+        K8('z', Z);
+        K8(PARAGRAPH_UTF_8, PARAGRAPH);
+        K8(MASCULINE_UTF_8, MASCULINE);
+        K8(S_SHARP_UTF_8, S_SHARP);
+        K8(A_GRAVE_LOWER_CASE_UTF_8, A_GRAVE);
+        K8(A_DIAERESIS_LOWER_CASE_UTF_8, A_DIAERESIS);
+        K8(A_RING_LOWER_CASE_UTF_8, A_RING);
+        K8(AE_LOWER_CASE_UTF_8, AE);
+        K8(C_CEDILLA_LOWER_CASE_UTF_8, C_CEDILLA);
+        K8(E_GRAVE_LOWER_CASE_UTF_8, E_GRAVE);
+        K8(E_ACUTE_LOWER_CASE_UTF_8, E_ACUTE);
+        K8(I_GRAVE_LOWER_CASE_UTF_8, I_GRAVE);
+        K8(N_TILDE_LOWER_CASE_UTF_8, N_TILDE);
+        K8(O_GRAVE_LOWER_CASE_UTF_8, O_GRAVE);
+        K8(O_DIAERESIS_LOWER_CASE_UTF_8, O_DIAERESIS);
+        K8(O_SLASH_LOWER_CASE_UTF_8, O_SLASH);
+        K8(U_GRAVE_LOWER_CASE_UTF_8, U_GRAVE);
+        K8(U_DIAERESIS_LOWER_CASE_UTF_8, U_DIAERESIS);
+        K8(CYRILLIC_A_LOWER_CASE_UTF_8, CYRILLIC_A);
+        K8(CYRILLIC_BE_LOWER_CASE_UTF_8, CYRILLIC_BE);
+        K8(CYRILLIC_VE_LOWER_CASE_UTF_8, CYRILLIC_VE);
+        K8(CYRILLIC_GHE_LOWER_CASE_UTF_8, CYRILLIC_GHE);
+        K8(CYRILLIC_DE_LOWER_CASE_UTF_8, CYRILLIC_DE);
+        K8(CYRILLIC_IE_LOWER_CASE_UTF_8, CYRILLIC_IE);
+        K8(CYRILLIC_ZHE_LOWER_CASE_UTF_8, CYRILLIC_ZHE);
+        K8(CYRILLIC_ZE_LOWER_CASE_UTF_8, CYRILLIC_ZE);
+        K8(CYRILLIC_I_LOWER_CASE_UTF_8, CYRILLIC_I);
+        K8(CYRILLIC_SHORT_I_LOWER_CASE_UTF_8, CYRILLIC_SHORT_I);
+        K8(CYRILLIC_KA_LOWER_CASE_UTF_8, CYRILLIC_KA);
+        K8(CYRILLIC_EL_LOWER_CASE_UTF_8, CYRILLIC_EL);
+        K8(CYRILLIC_EM_LOWER_CASE_UTF_8, CYRILLIC_EM);
+        K8(CYRILLIC_EN_LOWER_CASE_UTF_8, CYRILLIC_EN);
+        K8(CYRILLIC_O_LOWER_CASE_UTF_8, CYRILLIC_O);
+        K8(CYRILLIC_PE_LOWER_CASE_UTF_8, CYRILLIC_PE);
+        K8(CYRILLIC_ER_LOWER_CASE_UTF_8, CYRILLIC_ER);
+        K8(CYRILLIC_ES_LOWER_CASE_UTF_8, CYRILLIC_ES);
+        K8(CYRILLIC_TE_LOWER_CASE_UTF_8, CYRILLIC_TE);
+        K8(CYRILLIC_U_LOWER_CASE_UTF_8, CYRILLIC_U);
+        K8(CYRILLIC_EF_LOWER_CASE_UTF_8, CYRILLIC_EF);
+        K8(CYRILLIC_HA_LOWER_CASE_UTF_8, CYRILLIC_HA);
+        K8(CYRILLIC_TSE_LOWER_CASE_UTF_8, CYRILLIC_TSE);
+        K8(CYRILLIC_CHE_LOWER_CASE_UTF_8, CYRILLIC_CHE);
+        K8(CYRILLIC_SHA_LOWER_CASE_UTF_8, CYRILLIC_SHA);
+        K8(CYRILLIC_SHCHA_LOWER_CASE_UTF_8, CYRILLIC_SHCHA);
+        K8(CYRILLIC_HARD_SIGN_LOWER_CASE_UTF_8, CYRILLIC_HARD_SIGN);
+        K8(CYRILLIC_YERU_LOWER_CASE_UTF_8, CYRILLIC_YERU);
+        K8(CYRILLIC_SOFT_SIGN_LOWER_CASE_UTF_8, CYRILLIC_SOFT_SIGN);
+        K8(CYRILLIC_E_LOWER_CASE_UTF_8, CYRILLIC_E);
+        K8(CYRILLIC_YU_LOWER_CASE_UTF_8, CYRILLIC_YU);
+        K8(CYRILLIC_YA_LOWER_CASE_UTF_8, CYRILLIC_YA);
+        K8(CYRILLIC_IO_LOWER_CASE_UTF_8, CYRILLIC_IO);
 
-        K(0x35, ESCAPE);
-        K('\r', ENTER);
-        K('\t', TAB);
-        K(NSBackspaceCharacter, BACKSPACE);
-        K(NSInsertFunctionKey, INSERT);
-        K(NSDeleteCharacter, DELETE);
-        K(NSLeftArrowFunctionKey, LEFT);
-        K(NSRightArrowFunctionKey, RIGHT);
-        K(NSUpArrowFunctionKey, UP);
-        K(NSDownArrowFunctionKey, DOWN);
-        K(NSPageUpFunctionKey, PAGE_UP);
-        K(NSPageDownFunctionKey, PAGE_DOWN);
-        K(NSHomeFunctionKey, HOME);
-        K(NSEndFunctionKey, END);
-        K(NSPrintFunctionKey, PRINT_SCREEN);
+        K8(0x35, ESCAPE);
+        K8('\r', ENTER);
+        K8('\t', TAB);
+        K16(NSBackspaceCharacter, BACKSPACE);
+        K16(NSInsertFunctionKey, INSERT);
+        K16(NSDeleteCharacter, DELETE);
+        K16(NSLeftArrowFunctionKey, LEFT);
+        K16(NSRightArrowFunctionKey, RIGHT);
+        K16(NSUpArrowFunctionKey, UP);
+        K16(NSDownArrowFunctionKey, DOWN);
+        K16(NSPageUpFunctionKey, PAGE_UP);
+        K16(NSPageDownFunctionKey, PAGE_DOWN);
+        K16(NSHomeFunctionKey, HOME);
+        K16(NSEndFunctionKey, END);
+        K16(NSPrintFunctionKey, PRINT_SCREEN);
         case GLFW_KEY_F1 ... GLFW_KEY_F24:
-            *cocoa_key = NSF1FunctionKey + (glfw_key - GLFW_KEY_F1); break;
-        case GLFW_KEY_KP_0 ... GLFW_KEY_KP_9:
-            *cocoa_key = NSEventModifierFlagNumericPad | (0x52 + (glfw_key - GLFW_KEY_KP_0)); break;
-        K((unichar)(0x41|NSEventModifierFlagNumericPad), KP_DECIMAL);
-        K((unichar)(0x43|NSEventModifierFlagNumericPad), KP_MULTIPLY);
-        K((unichar)(0x45|NSEventModifierFlagNumericPad), KP_ADD);
-        K((unichar)(0x4B|NSEventModifierFlagNumericPad), KP_DIVIDE);
-        K((unichar)(0x4E|NSEventModifierFlagNumericPad), KP_SUBTRACT);
-        K((unichar)(0x51|NSEventModifierFlagNumericPad), KP_EQUAL);
-#undef K
+            utf_16_key = NSF1FunctionKey + (glfw_key - GLFW_KEY_F1); break;
+#undef K8
+#undef K16
 END_ALLOW_CASE_RANGE
+    }
+    if (utf_16_key != 0) {
+         strncpy(cocoa_key, [[NSString stringWithCharacters:&utf_16_key length:1] UTF8String], key_sz - 1);
+    } else {
+        unsigned str_pos = 0;
+        for (unsigned i = 0; i < 4 && str_pos < key_sz - 1; i++) {
+            uint8_t byte = (utf_8_key >> 24) & 0xff;
+            utf_8_key <<= 8;
+            if (byte != 0) cocoa_key[str_pos++] = byte;
+        }
+        cocoa_key[str_pos] = 0;
     }
 }
 

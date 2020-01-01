@@ -271,7 +271,7 @@ bool _glfwCreateContextNSGL(_GLFWwindow* window,
         return false;
     }
 
-    NSOpenGLContext* share = NULL;
+    NSOpenGLContext* share = nil;
 
     if (ctxconfig->share)
         share = ctxconfig->share->context.nsgl.object;
@@ -293,8 +293,7 @@ bool _glfwCreateContextNSGL(_GLFWwindow* window,
                                   forParameter:NSOpenGLContextParameterSurfaceOpacity];
     }
 
-    if (window->ns.retina)
-        [window->ns.view setWantsBestResolutionOpenGLSurface:YES];
+    [window->ns.view setWantsBestResolutionOpenGLSurface:window->ns.retina];
 
     GLint interval = 0;
     [window->context.nsgl.object setValues:&interval
@@ -325,7 +324,7 @@ GLFWAPI id glfwGetNSGLContext(GLFWwindow* handle)
     if (window->context.client == GLFW_NO_API)
     {
         _glfwInputError(GLFW_NO_WINDOW_CONTEXT, NULL);
-        return NULL;
+        return nil;
     }
 
     return window->context.nsgl.object;

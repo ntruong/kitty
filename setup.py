@@ -200,8 +200,10 @@ def init_env(
     if ccver < (5, 2) and cc == 'gcc':
         missing_braces = '-Wno-missing-braces'
     df = '-g3'
+    float_conversion = ''
     if ccver >= (5, 0):
         df += ' -Og'
+        float_conversion = '-Wfloat-conversion'
     optimize = df if debug or sanitize else '-O3'
     sanitize_args = get_sanitize_args(cc, ccver) if sanitize else set()
     cppflags = os.environ.get(
@@ -212,9 +214,10 @@ def init_env(
         cppflags.append('-DDEBUG_{}'.format(el.upper().replace('-', '_')))
     cflags = os.environ.get(
         'OVERRIDE_CFLAGS', (
-            '-Wextra -Wfloat-conversion -Wno-missing-field-initializers -Wall -Wstrict-prototypes -std=c11'
+            '-Wextra {} -Wno-missing-field-initializers -Wall -Wstrict-prototypes -std=c11'
             ' -pedantic-errors -Werror {} {} -fwrapv {} {} -pipe {} -fvisibility=hidden'
         ).format(
+            float_conversion,
             optimize,
             ' '.join(sanitize_args),
             stack_protector,
@@ -270,9 +273,6 @@ def kitty_env():
     gl_libs = ['-framework', 'OpenGL'] if is_macos else pkg_config('gl', '--libs')
     libpng = pkg_config('libpng', '--libs')
     ans.ldpaths += pylib + font_libs + gl_libs + libpng
-    if not is_macos:
-        cflags.extend(pkg_config('libcanberra', '--cflags-only-I'))
-        ans.ldpaths += pkg_config('libcanberra', '--libs')
     if is_macos:
         ans.ldpaths.extend('-framework Cocoa'.split())
     else:
@@ -336,8 +336,11 @@ def newer(dest, *sources):
     except EnvironmentError:
         return True
     for s in sources:
-        if os.path.getmtime(s) >= dtime:
-            return True
+        try:
+            if os.path.getmtime(s) >= dtime:
+                return True
+        except FileNotFoundError:
+            pass
     return False
 
 
@@ -382,8 +385,9 @@ def parallel_run(items):
             return
         pid, s = os.wait()
         compile_cmd, w = workers.pop(pid, (None, None))
-        if compile_cmd is not None and ((s & 0xff) != 0 or ((s >> 8) & 0xff) != 0) and failed is None:
-            failed = compile_cmd
+        if compile_cmd is not None and ((s & 0xff) != 0 or ((s >> 8) & 0xff) != 0):
+            if failed is None:
+                failed = compile_cmd
         elif compile_cmd.on_success is not None:
             compile_cmd.on_success()
 
@@ -759,7 +763,7 @@ def macos_info_plist():
         NSRequiresAquaSystemAppearance='NO',
         NSHumanReadableCopyright=time.strftime(
             'Copyright %Y, Kovid Goyal'),
-        CFBundleGetInfoString='kitty, an OpenGL based terminal emulator https://sw.kovidgoyal.net/kitty',
+        CFBundleGetInfoString='kitty, an OpenGL based terminal emulator https://sw.kovidgoyal.net/kitty/',
         CFBundleIconFile=appname + '.icns',
         NSHighResolutionCapable=True,
         NSSupportsAutomaticGraphicsSwitching=True,

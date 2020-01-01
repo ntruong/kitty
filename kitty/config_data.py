@@ -393,10 +393,13 @@ Use negative numbers to change scroll direction.'''))
 
 g('mouse')  # {{{
 
-o('mouse_hide_wait', 3.0, option_type=float, long_text=_('''
+o('mouse_hide_wait', 0.0 if is_macos else 3.0, option_type=float, long_text=_('''
 Hide mouse cursor after the specified number of seconds
 of the mouse not being used. Set to zero to disable mouse cursor hiding.
-Set to a negative value to hide the mouse cursor immediately when typing text.'''))
+Set to a negative value to hide the mouse cursor immediately when typing text.
+Disabled by default on macOS as getting it to work robustly with
+the ever-changing sea of bugs that is Cocoa is too much effort.
+'''))
 
 o('url_color', '#0087bd', option_type=to_color, long_text=_('''
 The color and style for highlighting URLs on mouse-over.
@@ -476,6 +479,7 @@ moving the mouse around'''))
 
 o('pointer_shape_when_grabbed', 'arrow', option_type=choices('arrow', 'beam', 'hand'), long_text=('''
 The shape of the mouse pointer when the program running in the terminal grabs the mouse.
+Valid values are: :code:`arrow`, :code:`beam` and :code:`hand`
 '''))
 
 # }}}
@@ -679,10 +683,10 @@ Which edge to show the tab bar on, top or bottom'''))
 o('tab_bar_margin_width', 0.0, option_type=positive_float, long_text=_('''
 The margin to the left and right of the tab bar (in pts)'''))
 
-o('tab_bar_style', 'fade', option_type=choices('fade', 'separator', 'hidden'), long_text=_('''
-The tab bar style, can be one of: :code:`fade`, :code:`separator` or :code:`hidden`. In the fade style,
-each tab's edges fade into the background color, in the separator style, tabs are
-separated by a configurable separator.
+o('tab_bar_style', 'fade', option_type=choices('fade', 'separator', 'powerline', 'hidden'), long_text=_('''
+The tab bar style, can be one of: :code:`fade`, :code:`separator`, :code:`powerline`, or :code:`hidden`.
+In the fade style, each tab's edges fade into the background color, in the separator style, tabs are
+separated by a configurable separator, and the powerline shows the tabs as a continuous line.
 '''))
 
 o('tab_bar_min_tabs', 2, option_type=lambda x: max(1, positive_int(x)), long_text=_('''
@@ -712,12 +716,20 @@ entries to this list.
 o('tab_separator', '"{}"'.format(default_tab_separator), option_type=tab_separator, long_text=_('''
 The separator between tabs in the tab bar when using :code:`separator` as the :opt:`tab_bar_style`.'''))
 
+
+def active_tab_title_template(x):
+    return None if x == 'none' else x
+
+
 o('tab_title_template', '{title}', long_text=_('''
 A template to render the tab title. The default just renders
 the title. If you wish to include the tab-index as well,
 use something like: :code:`{index}: {title}`. Useful
 if you have shortcuts mapped for :code:`goto_tab N`.
 '''))
+o('active_tab_title_template', 'none', option_type=active_tab_title_template, long_text=_('''
+Template to use for active tabs, if not specified falls back
+to :opt:`tab_title_template`.'''))
 
 o('active_tab_foreground', '#000', option_type=to_color, long_text=_('''
 Tab bar colors and styles'''))
@@ -726,6 +738,8 @@ o('active_tab_font_style', 'bold-italic', option_type=tab_font_style)
 o('inactive_tab_foreground', '#444', option_type=to_color)
 o('inactive_tab_background', '#999', option_type=to_color)
 o('inactive_tab_font_style', 'normal', option_type=tab_font_style)
+o('tab_bar_background', 'none', option_type=to_color_or_none, long_text=_('''
+Background color for the tab bar. Defaults to using the terminal background color.'''))
 
 # }}}
 
@@ -812,9 +826,9 @@ ensure that the shell starts in interactive mode and reads its startup rc files.
 
 o('editor', '.', long_text=_('''
 The console editor to use when editing the kitty config file or similar tasks.
-A value of . means to use the environment variable EDITOR. Note that this
-environment variable has to be set not just in your shell startup scripts but
-system-wide, otherwise kitty will not see it.
+A value of . means to use the environment variables VISUAL and EDITOR in that
+order. Note that this environment variable has to be set not just in your shell
+startup scripts but system-wide, otherwise kitty will not see it.
 '''))
 
 o('close_on_child_death', False, long_text=_('''
@@ -826,11 +840,23 @@ Note that setting it to yes means that any background processes still using the
 terminal can fail silently because their stdout/stderr/stdin no longer work.
 '''))
 
-o('allow_remote_control', False, long_text=_('''
+
+def allow_remote_control(x):
+    if x != 'socket-only':
+        x = 'y' if to_bool(x) else 'n'
+    return x
+
+
+o('allow_remote_control', 'no', option_type=allow_remote_control, long_text=_('''
 Allow other programs to control kitty. If you turn this on other programs can
-control all aspects of kitty, including sending text to kitty windows,
-opening new windows, closing windows, reading the content of windows, etc.
-Note that this even works over ssh connections.
+control all aspects of kitty, including sending text to kitty windows, opening
+new windows, closing windows, reading the content of windows, etc.  Note that
+this even works over ssh connections. You can chose to either allow any program
+running within kitty to control it, with :code:`yes` or only programs that
+connect to the socket specified with the :option:`kitty --listen-on` command
+line option, if you use the value :code:`socket-only`. The latter is useful if
+you want to prevent programs running on a remote computer over ssh from
+controlling kitty.
 '''))
 
 o(
@@ -1061,13 +1087,13 @@ if is_macos:
 k('show_scrollback', 'kitty_mod+h', 'show_scrollback', _('Browse scrollback buffer in less'), long_text=_('''
 
 You can pipe the contents of the current screen + history buffer as
-:file:`STDIN` to an arbitrary program using the ``pipe`` function. For example,
+:file:`STDIN` to an arbitrary program using the ``launch`` function. For example,
 the following opens the scrollback buffer in less in an overlay window::
 
-    map f1 pipe @ansi overlay less +G -R
+    map f1 launch --stdin-source=@screen_scrollback --stdin-add-formatting --type=overlay less +G -R
 
 For more details on piping screen and buffer contents to external programs,
-see :doc:`pipe`.
+see :doc:`launch`.
 '''))
 
 
@@ -1077,26 +1103,27 @@ g('shortcuts.window')  # {{{
 k('new_window', 'kitty_mod+enter', 'new_window', _(''), long_text=_('''
 You can open a new window running an arbitrary program, for example::
 
-    map kitty_mod+y      new_window mutt
+    map kitty_mod+y      launch mutt
 
 You can open a new window with the current working directory set to the
 working directory of the current window using::
 
-    map ctrl+alt+enter    new_window_with_cwd
+    map ctrl+alt+enter    launch --cwd=current
 
 You can open a new window that is allowed to control kitty via
 the kitty remote control facility by prefixing the command line with @.
 Any programs running in that window will be allowed to control kitty.
 For example::
 
-    map ctrl+enter new_window @ some_program
+    map ctrl+enter launch --allow-remote-control some_program
 
 You can open a new window next to the currently active window or as the first window,
 with::
 
-    map ctrl+n new_window !neighbor some_program
-    map ctrl+f new_window !first some_program
+    map ctrl+n launch --location=neighbor some_program
+    map ctrl+f launch --location=first some_program
 
+For more details, see :doc:`launch`.
 '''))
 if is_macos:
     k('new_window', 'cmd+enter', 'new_window', _('New window'), add_to_docs=False)

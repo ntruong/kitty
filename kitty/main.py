@@ -18,7 +18,7 @@ from .constants import (
     is_wayland, kitty_exe, logo_data_file
 )
 from .fast_data_types import (
-    GLFW_IBEAM_CURSOR, GLFW_MOD_SUPER, create_os_window, free_font_data,
+    GLFW_IBEAM_CURSOR, create_os_window, free_font_data,
     glfw_init, glfw_terminate, load_png_data, set_custom_cursor,
     set_default_window_icon, set_options
 )
@@ -95,10 +95,6 @@ def init_glfw(opts, debug_keyboard=False):
     return glfw_module
 
 
-def prefer_cmd_shortcuts(x):
-    return x[0] == GLFW_MOD_SUPER
-
-
 def get_new_os_window_trigger(opts):
     new_os_window_trigger = None
     if is_macos:
@@ -108,8 +104,8 @@ def get_new_os_window_trigger(opts):
                 new_os_window_shortcuts.append(k)
         if new_os_window_shortcuts:
             from .fast_data_types import cocoa_set_new_window_trigger
-            new_os_window_shortcuts.sort(key=prefer_cmd_shortcuts, reverse=True)
-            for candidate in new_os_window_shortcuts:
+            # Reverse list so that later defined keyboard shortcuts take priority over earlier defined ones
+            for candidate in reversed(new_os_window_shortcuts):
                 if cocoa_set_new_window_trigger(candidate[0], candidate[2]):
                     new_os_window_trigger = candidate
                     break
@@ -205,16 +201,23 @@ def macos_cmdline(argv_args):
 
 def read_shell_environment(opts=None):
     if not hasattr(read_shell_environment, 'ans'):
+        ans = read_shell_environment.ans = {}
         import subprocess
         from .session import resolved_shell
         shell = resolved_shell(opts)
         master, slave = openpty()
         remove_blocking(master)
-        p = subprocess.Popen(shell + ['-l', '-c', 'env'], stdout=slave, stdin=slave, stderr=slave, start_new_session=True, close_fds=True)
+        try:
+            p = subprocess.Popen(shell + ['-l', '-c', 'env'], stdout=slave, stdin=slave, stderr=slave, start_new_session=True, close_fds=True)
+        except FileNotFoundError:
+            log_error('Could not find shell to read environment')
+            return ans
         with os.fdopen(master, 'rb') as stdout, os.fdopen(slave, 'wb'):
             raw = b''
             from subprocess import TimeoutExpired
-            while True:
+            from time import monotonic
+            start_time = monotonic()
+            while monotonic() - start_time < 1.5:
                 try:
                     ret = p.wait(0.01)
                 except TimeoutExpired:
@@ -223,7 +226,10 @@ def read_shell_environment(opts=None):
                     raw += stdout.read()
                 if ret is not None:
                     break
-            if p.returncode == 0:
+            if p.returncode is None:
+                log_error('Timed out waiting for shell to quit while reading shell environment')
+                p.kill()
+            elif p.returncode == 0:
                 while True:
                     try:
                         x = stdout.read()
@@ -233,35 +239,41 @@ def read_shell_environment(opts=None):
                         break
                     raw += x
                 raw = raw.decode('utf-8', 'replace')
-                ans = read_shell_environment.ans = {}
                 for line in raw.splitlines():
                     k, v = line.partition('=')[::2]
                     if k and v:
                         ans[k] = v
             else:
                 log_error('Failed to run shell to read its environment')
-                read_shell_environment.ans = {}
     return read_shell_environment.ans
+
+
+def get_editor_from_env(shell_env):
+    for var in ('VISUAL', 'EDITOR'):
+        editor = shell_env.get(var)
+        if editor:
+            if 'PATH' in shell_env:
+                import shlex
+                editor_cmd = shlex.split(editor)
+                if not os.path.isabs(editor_cmd[0]):
+                    editor_cmd[0] = shutil.which(editor_cmd[0], path=shell_env['PATH'])
+                    if editor_cmd[0]:
+                        editor = ' '.join(map(shlex.quote, editor_cmd))
+                    else:
+                        editor = None
+            if editor:
+                return editor
 
 
 def setup_environment(opts, args):
     extra_env = opts.env.copy()
     if opts.editor == '.':
-        if 'EDITOR' not in os.environ:
+        editor = get_editor_from_env(os.environ)
+        if not editor:
             shell_env = read_shell_environment(opts)
-            if 'EDITOR' in shell_env:
-                editor = shell_env['EDITOR']
-                if 'PATH' in shell_env:
-                    import shlex
-                    editor_cmd = shlex.split(editor)
-                    if not os.path.isabs(editor_cmd[0]):
-                        editor_cmd[0] = shutil.which(editor_cmd[0], path=shell_env['PATH'])
-                        if editor_cmd[0]:
-                            editor = ' '.join(map(shlex.quote, editor_cmd))
-                        else:
-                            editor = None
-                if editor:
-                    os.environ['EDITOR'] = editor
+            editor = get_editor_from_env(shell_env)
+        if editor:
+            os.environ['EDITOR'] = editor
     else:
         os.environ['EDITOR'] = opts.editor
     if args.listen_on:
